@@ -6,6 +6,30 @@ LiDAR display and editing, ground classification, TIN contours, and raster
 surface generation. The goal is one coherent 3D workflow rather than separate
 model-viewer and point-cloud features.
 
+## Status
+
+- The v2.1.0 release candidate now contains the stable production slice of
+  Weeks 1–5. Week 1 provides hardened 3MF import, mesh LODs, and atomic terrain
+  draping. Week 2 adds topology diagnostics and undoable mesh repair commands.
+  Week 3 adds atomic 3MF Core export and tested material/unit/topology round
+  trips.
+- Terrain work now records full-density DTM/DSM/hillshade outputs as
+  fingerprinted, CRS-aware project sources with regeneration recipes.
+  `POINTCLOUDBREAKLINECHECK` validates selected 3D breaklines,
+  `POINTCLOUDSURFACEAT` inspects an interpolated elevation, and
+  `POINTCLOUDDRAPE` supports arcs, circles, ellipses, splines, closed
+  footprints, 2D/3D polylines, and mesh copies.
+- The existing spatial-project CRS/local-origin model, bounded point budgets,
+  tile-backed full-density raster jobs, cross-section manager, LOD telemetry,
+  installer associations, and large real-model gates provide the Week 5
+  integration and release baseline. See
+  [the compatibility matrix](v2.1.0-3d-compatibility.md).
+- Advanced interactive sub-object overlays, hierarchy-to-block preservation,
+  constrained-Delaunay breakline rebuilding, image/corridor draping, surface
+  difference heat maps, occlusion culling, and signed-release infrastructure
+  remain explicitly post-v2.1.0. They are not silently represented as
+  production-ready features.
+
 ## Product principles
 
 - Preserve source coordinates, units, materials, and spatial-reference
@@ -117,3 +141,46 @@ and stable on both integrated and discrete GPUs at the supported memory floor.
 
 These are valuable, but they should not displace topology correctness, 3MF
 round-trip, surface provenance, or bounded-memory processing.
+
+## Next three weeks after v2.1.0
+
+### Week 1 — interaction and import/export jobs
+
+- Add a bounded working-region model for vertex/edge/face selection and visible
+  hover/selection overlays. Keep whole-object transforms as the fallback above
+  the supported sub-object budget.
+- Move 3MF import/export to cancellable jobs with progress, peak-memory
+  telemetry, explicit centering/unit/material controls, and a repair-on-copy
+  export option.
+- Persist a small assembly graph so 3MF components can round-trip as CAD blocks
+  without changing the exact mesh entities used by the renderer.
+
+Gate: deterministic selection/edit tests, cancellation at every job phase, and
+component-transform round trips on nested fixtures and the Boston HIGH model.
+
+### Week 2 — editable terrain surfaces
+
+- Introduce a persistent full-density TIN surface object backed by indexed
+  source tiles and the existing regeneration recipe.
+- Apply validated breaklines through a constrained-Delaunay rebuild, with
+  preview, cancel, undo, and explicit handling for boundary gaps.
+- Add terrain-aware snapping, cut/fill profiles, and surface-difference rasters;
+  keep image and corridor draping behind an experimental flag until coverage
+  and coordinate-space tests are complete.
+
+Gate: regenerate after source/classification changes with identical provenance,
+bounded memory, and numeric elevation/volume fixtures.
+
+### Week 3 — workspace, performance, and signed release automation
+
+- Consolidate render mode, transform space, mesh diagnostics, active surface,
+  LOD, and memory budgets into one 3D workspace panel.
+- Add conservative GPU occlusion culling behind telemetry and automatic
+  fallback, then test integrated-GPU and discrete-GPU memory floors.
+- Exercise mixed CAD/3MF/LAS save-reopen and undo-redo flows in CI, install the
+  MSI in a clean Windows VM, and enable Azure signing once repository signing
+  credentials are available.
+
+Gate: no regression in exact geometry or large-fixture tests, graceful fallback
+under memory pressure, clean upgrade/uninstall, and signed/hash-published
+artifacts from the release workflow.

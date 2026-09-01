@@ -367,9 +367,11 @@ pub struct Breakline {
 #[serde(rename_all = "snake_case")]
 pub enum BreaklineIssueKind {
     TooFewVertices,
+    NonFiniteVertex,
     DuplicateVertex,
     ZeroLengthSegment,
     SelfIntersection,
+    CrossingBreakline,
     ElevationSpike,
 }
 
@@ -392,6 +394,16 @@ pub fn validate_breaklines(lines: &[Breakline], max_grade: Option<f64>) -> Vec<B
                 "not enough vertices",
             ));
             continue;
+        }
+        for (index, vertex) in line.vertices.iter().enumerate() {
+            if !vertex.iter().copied().all(f64::is_finite) {
+                issues.push(issue(
+                    line,
+                    Some(index),
+                    BreaklineIssueKind::NonFiniteVertex,
+                    "vertex contains a non-finite coordinate",
+                ));
+            }
         }
         let segment_count = line.vertices.len() - 1 + usize::from(line.closed);
         for segment in 0..segment_count {
@@ -453,6 +465,39 @@ pub fn validate_breaklines(lines: &[Breakline], max_grade: Option<f64>) -> Vec<B
                         BreaklineIssueKind::SelfIntersection,
                         &format!("segment {left} intersects segment {right}"),
                     ));
+                }
+            }
+        }
+    }
+    // Crossings between distinct breaklines are just as important as a
+    // self-crossing: a constrained surface cannot ingest them without first
+    // splitting both source segments at the intersection.
+    for left_line in 0..lines.len() {
+        for right_line in left_line + 1..lines.len() {
+            let left = &lines[left_line];
+            let right = &lines[right_line];
+            if left.vertices.len() < 2 || right.vertices.len() < 2 {
+                continue;
+            }
+            let left_segments = left.vertices.len() - 1 + usize::from(left.closed);
+            let right_segments = right.vertices.len() - 1 + usize::from(right.closed);
+            for left_segment in 0..left_segments {
+                let a = left.vertices[left_segment];
+                let b = left.vertices[(left_segment + 1) % left.vertices.len()];
+                for right_segment in 0..right_segments {
+                    let c = right.vertices[right_segment];
+                    let d = right.vertices[(right_segment + 1) % right.vertices.len()];
+                    if segments_intersect_xy(a, b, c, d) {
+                        issues.push(issue(
+                            left,
+                            Some(left_segment),
+                            BreaklineIssueKind::CrossingBreakline,
+                            &format!(
+                                "segment {left_segment} crosses breakline '{}' segment {right_segment}",
+                                right.id
+                            ),
+                        ));
+                    }
                 }
             }
         }
@@ -539,5 +584,25 @@ mod tests {
         assert!(issues
             .iter()
             .any(|item| item.kind == BreaklineIssueKind::ElevationSpike));
+    }
+
+    #[test]
+    fn breakline_validation_finds_crossings_between_lines() {
+        let lines = vec![
+            Breakline {
+                id: "east-west".to_string(),
+                vertices: vec![[0.0, 5.0, 0.0], [10.0, 5.0, 0.0]],
+                closed: false,
+            },
+            Breakline {
+                id: "north-south".to_string(),
+                vertices: vec![[5.0, 0.0, 0.0], [5.0, 10.0, 0.0]],
+                closed: false,
+            },
+        ];
+        let issues = validate_breaklines(&lines, None);
+        assert!(issues
+            .iter()
+            .any(|item| item.kind == BreaklineIssueKind::CrossingBreakline));
     }
 }

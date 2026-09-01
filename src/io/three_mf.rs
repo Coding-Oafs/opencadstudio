@@ -14,7 +14,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Read, Seek};
+use std::io::{BufRead, BufReader, BufWriter, Cursor, Read, Seek, Write};
 use std::path::Path;
 
 const START_PART_REL: &str = "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel";
@@ -180,10 +180,43 @@ struct Model {
     stats: ImportStats,
 }
 
+/// Optional behaviours for converting a 3MF build into CAD entities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportOptions {
+    /// Subtract the model's XY bounds center from every emitted vertex (Z is
+    /// preserved) so drawings built around a distant local origin start near
+    /// the WCS origin. Default false: source coordinates are kept exactly.
+    pub center_model: bool,
+    /// Override the package's declared unit (a 3MF unit name). Default None:
+    /// honour the package.
+    pub unit_override: Option<String>,
+    /// Map base materials to per-color layers and entity colors. Default
+    /// true. When false every object uses the default material color.
+    pub preserve_materials: bool,
+}
+
+impl Default for ImportOptions {
+    fn default() -> Self {
+        Self {
+            center_model: false,
+            unit_override: None,
+            preserve_materials: true,
+        }
+    }
+}
+
 /// Open a 3MF package and convert its primary build to persistent CAD meshes.
 pub fn import_path(
     path: &Path,
     progress: Option<&(dyn Fn(u16) + Sync)>,
+) -> Result<ImportResult, String> {
+    import_path_with_options(path, progress, &ImportOptions::default())
+}
+
+pub fn import_path_with_options(
+    path: &Path,
+    progress: Option<&(dyn Fn(u16) + Sync)>,
+    options: &ImportOptions,
 ) -> Result<ImportResult, String> {
     let file = File::open(path).map_err(|error| format!("failed to open 3MF: {error}"))?;
     let mut archive =
@@ -212,7 +245,7 @@ pub fn import_path(
     model.stats.skipped_parts_total = feature_parts.len();
     model.stats.skipped_parts = feature_parts;
     model.stats.skipped_parts.truncate(8);
-    let mut result = model.into_document()?;
+    let mut result = model.into_document_with(options)?;
     result.document.source_path = Some(path.to_string_lossy().into_owned());
     if let Some(progress) = progress {
         progress(1000);
@@ -595,10 +628,38 @@ impl Model {
             .unwrap_or([178, 178, 217, 255])
     }
 
-    fn into_document(mut self) -> Result<ImportResult, String> {
+    fn into_document(self) -> Result<ImportResult, String> {
+        self.into_document_with(&ImportOptions::default())
+    }
+
+    fn into_document_with(mut self, options: &ImportOptions) -> Result<ImportResult, String> {
+        let unit = options
+            .unit_override
+            .as_deref()
+            .unwrap_or(&self.unit)
+            .to_string();
         let mut document = CadDocument::new();
-        document.header.insertion_units = unit_code(&self.unit)?;
+        document.header.insertion_units = unit_code(&unit)?;
         let mut stats = std::mem::take(&mut self.stats);
+        stats.unit = unit;
+        // Centering needs the combined bounds before anything is emitted, so
+        // walk the build once without producing entities.
+        let center = if options.center_model {
+            let mut bounds: Option<([f64; 3], [f64; 3])> = None;
+            let mut walked = HashSet::new();
+            for item in &self.build {
+                self.bounds_object(
+                    item.object_id,
+                    &[item.transform],
+                    &mut walked,
+                    &mut bounds,
+                    0,
+                )?;
+            }
+            bounds.map(|(min, max)| [(min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5])
+        } else {
+            None
+        };
         let mut active = HashSet::new();
         for item in &self.build {
             self.emit_object(
@@ -608,12 +669,43 @@ impl Model {
                 &mut document,
                 &mut stats,
                 0,
+                options,
+                center,
             )?;
         }
         if stats.mesh_entities == 0 {
             return Err("3MF build resolves to no usable mesh geometry".to_string());
         }
         Ok(ImportResult { document, stats })
+    }
+
+    fn bounds_object(
+        &self,
+        object_id: u32,
+        outer_transforms: &[Transform],
+        walked: &mut HashSet<(u32, usize)>,
+        bounds: &mut Option<([f64; 3], [f64; 3])>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth > MAX_COMPONENT_DEPTH {
+            return Err("3MF component nesting exceeds the safety limit".to_string());
+        }
+        let object = self
+            .objects
+            .get(&object_id)
+            .ok_or_else(|| format!("3MF references missing object {object_id}"))?;
+        for vertex in &object.vertices {
+            expand_bounds(bounds, transformed_vertex(*vertex, outer_transforms));
+        }
+        for component in &object.components {
+            let mut transforms = Vec::with_capacity(outer_transforms.len() + 1);
+            transforms.push(component.transform);
+            transforms.extend_from_slice(outer_transforms);
+            if walked.insert((component.object_id, depth)) {
+                self.bounds_object(component.object_id, &transforms, walked, bounds, depth + 1)?;
+            }
+        }
+        Ok(())
     }
 
     fn emit_object(
@@ -624,6 +716,8 @@ impl Model {
         document: &mut CadDocument,
         stats: &mut ImportStats,
         depth: usize,
+        options: &ImportOptions,
+        center: Option<[f64; 2]>,
     ) -> Result<(), String> {
         if depth > MAX_COMPONENT_DEPTH {
             return Err("3MF component nesting exceeds the safety limit".to_string());
@@ -638,7 +732,7 @@ impl Model {
             .get(&object_id)
             .ok_or_else(|| format!("3MF references missing object {object_id}"))?;
         if !object.vertices.is_empty() || !object.triangles.is_empty() {
-            self.emit_mesh(object, outer_transforms, document, stats)?;
+            self.emit_mesh(object, outer_transforms, document, stats, options, center)?;
         }
         for component in &object.components {
             let mut transforms = Vec::with_capacity(outer_transforms.len() + 1);
@@ -651,6 +745,8 @@ impl Model {
                 document,
                 stats,
                 depth + 1,
+                options,
+                center,
             )?;
         }
         active.remove(&object_id);
@@ -663,6 +759,8 @@ impl Model {
         transforms: &[Transform],
         document: &mut CadDocument,
         stats: &mut ImportStats,
+        options: &ImportOptions,
+        center: Option<[f64; 2]>,
     ) -> Result<(), String> {
         if object.vertices.is_empty() || object.triangles.is_empty() {
             return Err(format!(
@@ -683,12 +781,21 @@ impl Model {
             }
         }
 
+        let place = |mut vertex: [f64; 3]| -> [f64; 3] {
+            if let Some([cx, cy]) = center {
+                vertex[0] -= cx;
+                vertex[1] -= cy;
+            }
+            vertex
+        };
         let mut groups: HashMap<[u8; 4], Vec<&Triangle>> = HashMap::new();
         for triangle in &object.triangles {
-            groups
-                .entry(self.material_color(triangle.property.or(object.property)))
-                .or_default()
-                .push(triangle);
+            let color = if options.preserve_materials {
+                self.material_color(triangle.property.or(object.property))
+            } else {
+                [178, 178, 217, 255]
+            };
+            groups.entry(color).or_default().push(triangle);
         }
         let multiple_materials = groups.len() > 1;
         for (color, triangles) in groups {
@@ -707,7 +814,7 @@ impl Model {
                 mesh.vertices = object
                     .vertices
                     .iter()
-                    .map(|vertex| transformed_vertex(*vertex, transforms))
+                    .map(|vertex| place(transformed_vertex(*vertex, transforms)))
                     .map(|[x, y, z]| Vector3::new(x, y, z))
                     .collect();
                 mesh.faces = triangles
@@ -728,8 +835,10 @@ impl Model {
                         mapped[corner] = if let Some(index) = remap.get(&source) {
                             *index
                         } else {
-                            let vertex =
-                                transformed_vertex(object.vertices[source as usize], transforms);
+                            let vertex = place(transformed_vertex(
+                                object.vertices[source as usize],
+                                transforms,
+                            ));
                             let index = mesh.vertices.len();
                             mesh.vertices
                                 .push(Vector3::new(vertex[0], vertex[1], vertex[2]));
@@ -831,6 +940,284 @@ fn ensure_layer(document: &mut CadDocument, name: &str, color: [u8; 4]) {
         b: color[2],
     };
     let _ = document.layers.add(layer);
+}
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExportStats {
+    pub objects: usize,
+    pub vertices: usize,
+    pub triangles: usize,
+    pub materials: usize,
+}
+
+fn zip_error(error: impl std::fmt::Display) -> String {
+    format!("3MF write failed: {error}")
+}
+
+/// Reverse of [`unit_code`]: the 3MF unit name for a drawing header unit code.
+fn unit_name(code: i16) -> &'static str {
+    match code {
+        1 => "inch",
+        2 => "foot",
+        4 => "millimeter",
+        5 => "centimeter",
+        6 => "meter",
+        13 => "micron",
+        _ => "millimeter",
+    }
+}
+
+/// Serialize the document's MESH entities as a conforming 3MF Core package.
+/// Exact source geometry, header units, entity colors (base materials), and
+/// layer names (object names) are preserved; polygon faces with more than
+/// three vertices are fan-triangulated.
+pub fn export_path(document: &CadDocument, path: &Path) -> Result<ExportStats, String> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("model.3mf");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let partial = parent.join(format!(".{stem}.{}.{}.partial", std::process::id(), nonce));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&partial)
+        .map_err(|error| format!("failed to create temporary 3MF: {error}"))?;
+    let result = write_package(document, file);
+    let stats = match result {
+        Ok(stats) => stats,
+        Err(error) => {
+            let _ = std::fs::remove_file(&partial);
+            return Err(error);
+        }
+    };
+
+    // Publish only after the complete ZIP has been finalized. Keep a unique
+    // adjacent backup during replacement so a failed rename cannot destroy an
+    // existing user file.
+    let backup = parent.join(format!(".{stem}.{}.{}.backup", std::process::id(), nonce));
+    let had_existing = path.exists();
+    if had_existing {
+        std::fs::rename(path, &backup)
+            .map_err(|error| format!("failed to stage existing 3MF for replacement: {error}"))?;
+    }
+    if let Err(error) = std::fs::rename(&partial, path) {
+        if had_existing {
+            let _ = std::fs::rename(&backup, path);
+        }
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("failed to publish completed 3MF: {error}"));
+    }
+    if had_existing {
+        let _ = std::fs::remove_file(&backup);
+    }
+    Ok(stats)
+}
+
+fn write_package(document: &CadDocument, sink: File) -> Result<ExportStats, String> {
+    let mut zip = zip::ZipWriter::new(sink);
+    let zip_options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    zip.start_file("[Content_Types].xml", zip_options)
+        .map_err(zip_error)?;
+    write!(
+        zip,
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#,
+            r#"<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#,
+            r#"<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>"#,
+            r#"</Types>"#
+        )
+    )
+    .map_err(zip_error)?;
+
+    zip.start_file("_rels/.rels", zip_options)
+        .map_err(zip_error)?;
+    write!(
+        zip,
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationship Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" Target="/3D/3dmodel.model"/></Relationships>"#
+        )
+    )
+    .map_err(zip_error)?;
+
+    zip.start_file("3D/3dmodel.model", zip_options)
+        .map_err(zip_error)?;
+    let stats = write_model(&mut zip, document)?;
+    zip.finish().map_err(zip_error)?;
+    Ok(stats)
+}
+
+fn write_model<W: Write>(zip: &mut W, document: &CadDocument) -> Result<ExportStats, String> {
+    use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
+    use quick_xml::Writer;
+
+    let meshes: Vec<&Mesh> = document
+        .entities()
+        .filter_map(|entity| match entity {
+            EntityType::Mesh(mesh) => Some(mesh),
+            _ => None,
+        })
+        .collect();
+    if meshes.is_empty() {
+        return Err("no MESH entities to export".to_string());
+    }
+    let mut total_triangles = 0usize;
+    for mesh in &meshes {
+        if mesh.vertices.len() > MAX_VERTICES {
+            return Err("3MF export exceeds the vertex/triangle safety limit".to_string());
+        }
+        for face in &mesh.faces {
+            if face
+                .vertices
+                .iter()
+                .any(|&index| index >= mesh.vertices.len())
+            {
+                return Err(format!(
+                    "mesh {} contains an out-of-range face index",
+                    mesh.common.handle
+                ));
+            }
+            total_triangles = total_triangles
+                .checked_add(face.vertices.len().saturating_sub(2))
+                .ok_or_else(|| "3MF export triangle count overflow".to_string())?;
+            if total_triangles > MAX_TRIANGLES {
+                return Err("3MF export exceeds the vertex/triangle safety limit".to_string());
+            }
+        }
+    }
+
+    // Distinct material colors in first-seen order.
+    let mesh_color = |mesh: &Mesh| -> [u8; 3] {
+        match mesh.common.color {
+            Color::Rgb { r, g, b } => [r, g, b],
+            _ => [178, 178, 217],
+        }
+    };
+    let mut colors: Vec<[u8; 3]> = Vec::new();
+    for mesh in &meshes {
+        let color = mesh_color(mesh);
+        if !colors.contains(&color) {
+            colors.push(color);
+        }
+    }
+
+    let mut writer = Writer::new(BufWriter::with_capacity(1024 * 1024, zip));
+    let xml = |result: std::io::Result<()>| -> Result<(), String> {
+        result.map_err(|error| format!("3MF model serialization failed: {error}"))
+    };
+
+    xml(writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None))))?;
+    let mut model = BytesStart::new("model");
+    model.push_attribute(("unit", unit_name(document.header.insertion_units)));
+    model.push_attribute(("xml:lang", "en-US"));
+    model.push_attribute((
+        "xmlns",
+        "http://schemas.microsoft.com/3dmanufacturing/core/2015/02",
+    ));
+    xml(writer.write_event(Event::Start(model)))?;
+
+    xml(writer.write_event(Event::Start(BytesStart::new("resources"))))?;
+    let mut materials = BytesStart::new("basematerials");
+    materials.push_attribute(("id", "1"));
+    xml(writer.write_event(Event::Start(materials)))?;
+    for (index, color) in colors.iter().enumerate() {
+        let mut base = BytesStart::new("base");
+        base.push_attribute(("name", format!("Base {index}").as_str()));
+        base.push_attribute((
+            "displaycolor",
+            format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2]).as_str(),
+        ));
+        xml(writer.write_event(Event::Empty(base)))?;
+    }
+    xml(writer.write_event(Event::End(BytesEnd::new("basematerials"))))?;
+
+    let mut stats = ExportStats {
+        objects: meshes.len(),
+        materials: colors.len(),
+        ..ExportStats::default()
+    };
+    for (position, mesh) in meshes.iter().enumerate() {
+        // Object ids start at 2: id 1 is the basematerials resource.
+        let object_id = (position + 2) as u32;
+        let color = mesh_color(mesh);
+        let material_index = colors
+            .iter()
+            .position(|candidate| *candidate == color)
+            .unwrap_or(0);
+        let name = if mesh.common.layer.trim().is_empty() {
+            format!("Mesh {}", mesh.common.handle.value())
+        } else {
+            mesh.common.layer.trim().to_string()
+        };
+
+        let mut object = BytesStart::new("object");
+        object.push_attribute(("id", object_id.to_string().as_str()));
+        object.push_attribute(("name", name.as_str()));
+        object.push_attribute(("pid", "1"));
+        object.push_attribute(("pindex", material_index.to_string().as_str()));
+        object.push_attribute(("type", "model"));
+        xml(writer.write_event(Event::Start(object)))?;
+        xml(writer.write_event(Event::Start(BytesStart::new("mesh"))))?;
+
+        xml(writer.write_event(Event::Start(BytesStart::new("vertices"))))?;
+        for vertex in &mesh.vertices {
+            let mut element = BytesStart::new("vertex");
+            element.push_attribute(("x", format!("{}", vertex.x).as_str()));
+            element.push_attribute(("y", format!("{}", vertex.y).as_str()));
+            element.push_attribute(("z", format!("{}", vertex.z).as_str()));
+            xml(writer.write_event(Event::Empty(element)))?;
+            stats.vertices += 1;
+        }
+        xml(writer.write_event(Event::End(BytesEnd::new("vertices"))))?;
+
+        xml(writer.write_event(Event::Start(BytesStart::new("triangles"))))?;
+        for face in &mesh.faces {
+            let indices = &face.vertices;
+            if indices.len() < 3 {
+                continue;
+            }
+            for fan in 1..indices.len() - 1 {
+                let mut triangle = BytesStart::new("triangle");
+                triangle.push_attribute(("v1", indices[0].to_string().as_str()));
+                triangle.push_attribute(("v2", indices[fan].to_string().as_str()));
+                triangle.push_attribute(("v3", indices[fan + 1].to_string().as_str()));
+                xml(writer.write_event(Event::Empty(triangle)))?;
+                stats.triangles += 1;
+            }
+        }
+        xml(writer.write_event(Event::End(BytesEnd::new("triangles"))))?;
+        xml(writer.write_event(Event::End(BytesEnd::new("mesh"))))?;
+        xml(writer.write_event(Event::End(BytesEnd::new("object"))))?;
+    }
+    xml(writer.write_event(Event::End(BytesEnd::new("resources"))))?;
+
+    xml(writer.write_event(Event::Start(BytesStart::new("build"))))?;
+    for position in 0..meshes.len() {
+        let mut item = BytesStart::new("item");
+        item.push_attribute(("objectid", (position + 2).to_string().as_str()));
+        xml(writer.write_event(Event::Empty(item)))?;
+    }
+    xml(writer.write_event(Event::End(BytesEnd::new("build"))))?;
+    xml(writer.write_event(Event::End(BytesEnd::new("model"))))?;
+
+    writer
+        .into_inner()
+        .flush()
+        .map_err(|error| format!("3MF model flush failed: {error}"))?;
+    Ok(stats)
 }
 
 #[cfg(test)]
@@ -963,6 +1350,189 @@ mod tests {
         );
     }
 
+    #[test]
+    fn exports_and_reimports_with_equivalent_topology_units_and_materials() {
+        let mut document = CadDocument::new();
+        document.header.insertion_units = 6; // meter
+
+        let mut terrain = Mesh::new();
+        terrain.vertices = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+        ];
+        for face in [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]] {
+            terrain
+                .faces
+                .push(MeshFace::triangle(face[0], face[1], face[2]));
+        }
+        terrain.common.layer = "3MF/Terrain".to_string();
+        terrain.common.color = Color::Rgb { r: 255, g: 0, b: 0 };
+        document.add_entity(EntityType::Mesh(terrain)).unwrap();
+
+        let mut water = Mesh::new();
+        water.vertices = vec![
+            Vector3::new(10.0, 0.0, 0.0),
+            Vector3::new(11.0, 0.0, 0.0),
+            Vector3::new(11.0, 1.0, 0.0),
+            Vector3::new(10.0, 1.0, 0.0),
+        ];
+        water.faces.push(MeshFace::quad(0, 1, 2, 3));
+        water.common.layer = "3MF/Water".to_string();
+        water.common.color = Color::Rgb { r: 0, g: 0, b: 255 };
+        document.add_entity(EntityType::Mesh(water)).unwrap();
+
+        let path =
+            std::env::temp_dir().join(format!("ocs-3mf-roundtrip-{}.3mf", std::process::id()));
+        let stats = export_path(&document, &path).unwrap();
+        assert_eq!(2, stats.objects);
+        assert_eq!(2, stats.materials);
+        assert_eq!(
+            6, stats.triangles,
+            "tetrahedron 4 + fan-triangulated quad 2"
+        );
+        assert_eq!(8, stats.vertices);
+
+        let imported = import_path(&path, None).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(6, imported.document.header.insertion_units);
+        assert_eq!(2, imported.stats.mesh_entities);
+        assert_eq!(6, imported.stats.triangles);
+        let (min, max) = imported.stats.bounds.expect("bounds");
+        for axis in 0..3 {
+            assert!((min[axis] - [0.0, 0.0, 0.0][axis]).abs() < 1.0e-9);
+            assert!((max[axis] - [11.0, 1.0, 1.0][axis]).abs() < 1.0e-9);
+        }
+        let mut colors: Vec<Color> = Vec::new();
+        let mut triangles_per_entity: Vec<usize> = Vec::new();
+        for entity in imported.document.entities() {
+            let EntityType::Mesh(mesh) = entity else {
+                continue;
+            };
+            colors.push(mesh.common.color);
+            triangles_per_entity.push(mesh.faces.len());
+            assert!(mesh.common.layer.contains("Terrain") || mesh.common.layer.contains("Water"));
+        }
+        triangles_per_entity.sort_unstable();
+        assert_eq!(vec![2, 4], triangles_per_entity);
+        assert!(colors.contains(&Color::Rgb { r: 255, g: 0, b: 0 }));
+        assert!(colors.contains(&Color::Rgb { r: 0, g: 0, b: 255 }));
+    }
+
+    #[test]
+    fn failed_export_preserves_an_existing_file() {
+        let mut document = CadDocument::new();
+        let mut mesh = Mesh::new();
+        mesh.vertices = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+        ];
+        mesh.faces.push(MeshFace::triangle(0, 1, 99));
+        document.add_entity(EntityType::Mesh(mesh)).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("ocs-3mf-atomic-export-{}.3mf", std::process::id()));
+        std::fs::write(&path, b"keep me").unwrap();
+
+        let error = export_path(&document, &path).expect_err("invalid mesh must fail");
+        assert!(error.contains("out-of-range"), "{error}");
+        assert_eq!(b"keep me", std::fs::read(&path).unwrap().as_slice());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn import_options_center_units_and_materials() {
+        use std::io::Write as _;
+
+        let mut package = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut package);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            writer.start_file("_rels/.rels", options).unwrap();
+            writer
+                .write_all(
+                    br##"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Target="/3D/3dmodel.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+</Relationships>"##,
+                )
+                .unwrap();
+            writer.start_file("3D/3dmodel.model", options).unwrap();
+            writer
+                .write_all(
+                    br##"<?xml version="1.0" encoding="UTF-8"?>
+<model unit="centimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources>
+    <basematerials id="5"><base name="red" displaycolor="#FF0000"/></basematerials>
+    <object id="1" pid="5" pindex="0"><mesh>
+      <vertices>
+        <vertex x="1000000" y="2000000" z="3"/><vertex x="1000002" y="2000000" z="3"/>
+        <vertex x="1000000" y="2000002" z="3"/>
+      </vertices>
+      <triangles><triangle v1="0" v2="1" v3="2"/></triangles>
+    </mesh></object>
+  </resources>
+  <build><item objectid="1"/></build>
+</model>"##,
+                )
+                .unwrap();
+            writer.finish().unwrap();
+        }
+        let path = std::env::temp_dir().join(format!("ocs-3mf-options-{}.3mf", std::process::id()));
+        std::fs::write(&path, package.get_ref()).unwrap();
+
+        let plain = import_path_with_options(&path, None, &ImportOptions::default()).unwrap();
+        assert_eq!(5, plain.document.header.insertion_units);
+        let (min, max) = plain.stats.bounds.expect("bounds");
+        assert!((min[0] - 1_000_000.0).abs() < 1.0e-6);
+        assert!((max[1] - 2_000_002.0).abs() < 1.0e-6);
+        let EntityType::Mesh(source) = plain.document.entities().next().unwrap() else {
+            panic!("expected mesh");
+        };
+        assert_eq!(
+            Color::Rgb { r: 255, g: 0, b: 0 },
+            source.common.color,
+            "default options preserve materials"
+        );
+
+        let adjusted = import_path_with_options(
+            &path,
+            None,
+            &ImportOptions {
+                center_model: true,
+                unit_override: Some("meter".to_string()),
+                preserve_materials: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(6, adjusted.document.header.insertion_units);
+        let (min, max) = adjusted.stats.bounds.expect("bounds");
+        assert!(
+            (min[0] + 1.0).abs() < 1.0e-6 && (max[0] - 1.0).abs() < 1.0e-6,
+            "X centered around zero (half-extent 1), got {min:?}..{max:?}"
+        );
+        assert!(
+            (min[1] + 1.0).abs() < 1.0e-6 && (max[1] - 1.0).abs() < 1.0e-6,
+            "Y centered around zero (half-extent 1), got {min:?}..{max:?}"
+        );
+        assert!((min[2] - 3.0).abs() < 1.0e-6, "Z preserved");
+        let EntityType::Mesh(dropped) = adjusted.document.entities().next().unwrap() else {
+            panic!("expected mesh");
+        };
+        assert_eq!(
+            Color::Rgb {
+                r: 178,
+                g: 178,
+                b: 217
+            },
+            dropped.common.color,
+            "preserve_materials=false drops the base material"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// Opt-in stress fixture for developer machines; CI does not ship large
     /// third-party models. Run with `OCS_3MF_STRESS_FILE=<path> cargo test
     /// imports_external_stress_fixture -- --ignored --nocapture`.
@@ -977,6 +1547,50 @@ mod tests {
         assert!(imported.stats.vertices > 0);
         assert!(imported.stats.triangles > 0);
         eprintln!("3MF import stats: {:?}", imported.stats);
+    }
+
+    /// Week-3 round-trip gate against a real model: import, export, re-import,
+    /// and compare object/triangle/vertex counts and bounds. Run with
+    /// `OCS_3MF_STRESS_FILE=<path> cargo test --release roundtrips_external -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn roundtrips_external_stress_fixture() {
+        let path = std::env::var_os("OCS_3MF_STRESS_FILE")
+            .map(std::path::PathBuf::from)
+            .expect("set OCS_3MF_STRESS_FILE to a local 3MF model");
+        let first = import_path(&path, None).unwrap();
+        let out = std::env::temp_dir().join(format!(
+            "ocs-3mf-roundtrip-stress-{}.3mf",
+            std::process::id()
+        ));
+        let export = export_path(&first.document, &out).unwrap();
+        let second = import_path(&out, None).unwrap();
+        let _ = std::fs::remove_file(&out);
+
+        assert_eq!(first.stats.mesh_entities, second.stats.mesh_entities);
+        assert_eq!(export.triangles, second.stats.triangles);
+        assert_eq!(first.stats.triangles, second.stats.triangles);
+        assert_eq!(first.stats.vertices, second.stats.vertices);
+        let (first_min, first_max) = first.stats.bounds.expect("first bounds");
+        let (second_min, second_max) = second.stats.bounds.expect("second bounds");
+        for axis in 0..3 {
+            assert!(
+                (first_min[axis] - second_min[axis]).abs() < 1.0e-6
+                    && (first_max[axis] - second_max[axis]).abs() < 1.0e-6,
+                "bounds diverged on axis {axis}: {first_min:?}..{first_max:?} vs {second_min:?}..{second_max:?}"
+            );
+        }
+        assert_eq!(
+            first.document.header.insertion_units,
+            second.document.header.insertion_units
+        );
+        eprintln!(
+            "3MF round trip: {} entities, {} triangles, {} vertices, unit {} preserved",
+            second.stats.mesh_entities,
+            second.stats.triangles,
+            second.stats.vertices,
+            second.stats.unit
+        );
     }
 
     /// Full viewport-cache stress pass for a large local 3MF fixture.

@@ -1464,6 +1464,29 @@ impl OpenCADStudio {
         )
     }
 
+    /// 3MF export serializes the exact source MESH entities (units, layers as
+    /// object names, entity colors as base materials) — not the display LODs —
+    /// so a round trip preserves the model the drawing actually owns.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn on_three_mf_export_path_some(
+        &mut self,
+        path: std::path::PathBuf,
+    ) -> Task<Message> {
+        let i = self.active_tab;
+        let document = self.tabs[i].scene.document.clone();
+        let worker_path = path.clone();
+        background_task(
+            move || {
+                let stats = crate::io::three_mf::export_path(&document, &worker_path)?;
+                Ok(format!(
+                    "{} object(s), {} vertices, {} triangles, {} base material(s)",
+                    stats.objects, stats.vertices, stats.triangles, stats.materials
+                ))
+            },
+            move |result| Message::ThreeMfExportFinished(path, result),
+        )
+    }
+
     pub(super) fn on_obj_import_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
         let tab_id = self.tabs[self.active_tab].id;
         let worker_path = path.clone();

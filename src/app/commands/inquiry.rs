@@ -1150,6 +1150,247 @@ impl OpenCADStudio {
                 }
             }
 
+            // ── MESHDIAGNOSE / MESHWELD / MESHFILL / MESHFLIP / MESHORIENT /
+            //    MESHDELETEFACE — mesh topology diagnostics and repair
+            //    (3D development plan, Week 2) ─────────────────────────────
+            cmd if cmd == "MESHDIAGNOSE"
+                || cmd.starts_with("MESHDIAGNOSE ")
+                || cmd == "MESHWELD"
+                || cmd.starts_with("MESHWELD ")
+                || cmd == "MESHFILL"
+                || cmd.starts_with("MESHFILL ")
+                || cmd == "MESHFLIP"
+                || cmd == "MESHORIENT"
+                || cmd.starts_with("MESHDELETEFACE ") =>
+            {
+                use crate::entities::mesh_topology::{
+                    delete_faces, fill_small_holes, orient_consistently, weld_vertices,
+                    MeshTopology,
+                };
+
+                // Topology passes build adjacency hashes sized to the face
+                // count; refuse to run them interactively on import-scale
+                // meshes (extract a working region or decimate first).
+                const MAX_DIAGNOSE_FACES: usize = 5_000_000;
+                const MAX_EDIT_FACES: usize = 1_000_000;
+
+                let (name, arguments) = cmd.split_once(' ').unwrap_or((cmd, ""));
+                let selected_meshes: Vec<(acadrust::Handle, acadrust::entities::mesh::Mesh)> = self
+                    .tabs[i]
+                    .scene
+                    .selected_entities()
+                    .into_iter()
+                    .filter(|(handle, _)| {
+                        self.tabs[i].scene.entity_belongs_to_active_space(*handle)
+                            && !self.tabs[i].scene.is_layer_locked(*handle)
+                    })
+                    .filter_map(|(handle, entity)| match entity {
+                        acadrust::EntityType::Mesh(mesh) => Some((handle, mesh.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                let total_meshes = selected_meshes.len();
+                if selected_meshes.is_empty() {
+                    self.command_line.push_error(
+                        crate::t!(
+                            "{name}: select one or more MESH entities first (3MF imports are MESH entities)."
+                        )
+                        .as_ref(),
+                    );
+                } else {
+                    match name {
+                        "MESHDIAGNOSE" => {
+                            let mut reported = 0usize;
+                            for (handle, mesh) in &selected_meshes {
+                                if mesh.faces.len() > MAX_DIAGNOSE_FACES {
+                                    self.command_line.push_error(
+                                        crate::tf!(
+                                            "MESHDIAGNOSE: mesh {handle} has {} faces (limit {MAX_DIAGNOSE_FACES}); extract a working region first.",
+                                            mesh.faces.len()
+                                        )
+                                        .as_ref(),
+                                    );
+                                    continue;
+                                }
+                                for line in MeshTopology::analyze(mesh).report_lines() {
+                                    self.command_line
+                                        .push_info(crate::tf!("mesh {handle}: {line}").as_ref());
+                                }
+                                reported += 1;
+                            }
+                            self.command_line.push_output(
+                                crate::tf!(
+                                    "MESHDIAGNOSE: reported on {reported} of {} selected mesh(es).",
+                                    selected_meshes.len()
+                                )
+                                .as_ref(),
+                            );
+                        }
+                        edit => {
+                            let mut updates: Vec<acadrust::EntityType> = Vec::new();
+                            let mut summary: Vec<String> = Vec::new();
+                            for (handle, mut mesh) in selected_meshes {
+                                if mesh.faces.len() > MAX_EDIT_FACES {
+                                    self.command_line.push_error(
+                                        crate::tf!(
+                                            "{edit}: mesh {handle} has {} faces (limit {MAX_EDIT_FACES}); extract a working region or decimate first.",
+                                            mesh.faces.len()
+                                        )
+                                        .as_ref(),
+                                    );
+                                    continue;
+                                }
+                                let outcome = match edit {
+                                    "MESHWELD" => {
+                                        let tolerance = arguments.trim().parse::<f64>();
+                                        match (arguments.trim().is_empty(), tolerance) {
+                                            (true, _) => {
+                                                let report = weld_vertices(&mut mesh, 0.0);
+                                                (report.merged_vertices > 0 || report.dropped_faces > 0).then(|| format!(
+                                                    "welded {} vertex(ies), dropped {} face(s) (exact coincident; pass a tolerance to merge near vertices)",
+                                                    report.merged_vertices,
+                                                    report.dropped_faces
+                                                ))
+                                            }
+                                            (false, Ok(tolerance))
+                                                if tolerance.is_finite() && tolerance >= 0.0 =>
+                                            {
+                                                let report = weld_vertices(&mut mesh, tolerance);
+                                                (report.merged_vertices > 0 || report.dropped_faces > 0).then(|| format!(
+                                                    "welded {} vertex(ies) at tolerance {tolerance}, dropped {} face(s)",
+                                                    report.merged_vertices,
+                                                    report.dropped_faces
+                                                ))
+                                            }
+                                            (false, _) => {
+                                                self.command_line.push_error(
+                                                    crate::t!(
+                                                        "MESHWELD: tolerance must be a finite, non-negative number."
+                                                    )
+                                                    .as_ref(),
+                                                );
+                                                None
+                                            }
+                                        }
+                                    }
+                                    "MESHFILL" => {
+                                        let max_edges = if arguments.trim().is_empty() {
+                                            Some(8)
+                                        } else {
+                                            arguments
+                                                .trim()
+                                                .parse::<usize>()
+                                                .ok()
+                                                .filter(|value| *value >= 3)
+                                        };
+                                        let Some(max_edges) = max_edges else {
+                                            self.command_line.push_error(
+                                                crate::t!(
+                                                    "MESHFILL: maximum boundary edges must be an integer of at least 3."
+                                                )
+                                                .as_ref(),
+                                            );
+                                            continue;
+                                        };
+                                        match fill_small_holes(&mut mesh, max_edges) {
+                                            Ok(report) => (report.filled_loops > 0).then(|| format!(
+                                                "filled {} hole(s) with {} face(s) up to {max_edges} boundary edges",
+                                                report.filled_loops, report.added_faces
+                                            )),
+                                            Err(error) => {
+                                                self.command_line.push_error(
+                                                    crate::tf!("MESHFILL: mesh {handle}: {error}")
+                                                        .as_ref(),
+                                                );
+                                                None
+                                            }
+                                        }
+                                    }
+                                    "MESHFLIP" => {
+                                        let faces = mesh.faces.len();
+                                        if faces > 0 {
+                                            mesh.flip_normals();
+                                        }
+                                        (faces > 0).then(|| format!("flipped {faces} face(s)"))
+                                    }
+                                    "MESHORIENT" => {
+                                        let flipped = orient_consistently(&mut mesh);
+                                        (flipped > 0).then(|| {
+                                            format!(
+                                                "flipped {flipped} face(s) to a consistent winding"
+                                            )
+                                        })
+                                    }
+                                    "MESHDELETEFACE" => {
+                                        let parsed: Result<Vec<usize>, _> = arguments
+                                            .split_whitespace()
+                                            .map(str::parse::<usize>)
+                                            .collect();
+                                        let Ok(indices) = parsed else {
+                                            self.command_line.push_error(
+                                                crate::t!(
+                                                    "MESHDELETEFACE: every face index must be a non-negative integer."
+                                                )
+                                                .as_ref(),
+                                            );
+                                            continue;
+                                        };
+                                        if indices.is_empty() {
+                                            self.command_line.push_error(
+                                                crate::t!(
+                                                    "MESHDELETEFACE: provide one or more 0-based face indices (see MESHDIAGNOSE)."
+                                                )
+                                                .as_ref(),
+                                            );
+                                            None
+                                        } else {
+                                            let removed = delete_faces(&mut mesh, &indices);
+                                            (removed > 0)
+                                                .then(|| format!("deleted {removed} face(s)"))
+                                        }
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(outcome) = outcome {
+                                    summary.push(format!("mesh {handle}: {outcome}"));
+                                    updates.push(acadrust::EntityType::Mesh(mesh));
+                                }
+                            }
+                            let changed = if updates.is_empty() {
+                                0
+                            } else {
+                                self.push_undo_snapshot(i, edit);
+                                let mut changed = 0usize;
+                                for entity in updates {
+                                    if self.tabs[i].scene.update_entity(entity) {
+                                        changed += 1;
+                                    }
+                                }
+                                if changed == 0 {
+                                    self.discard_last_undo_entry(i);
+                                }
+                                changed
+                            };
+                            if changed > 0 {
+                                self.tabs[i].dirty = true;
+                                self.refresh_properties();
+                            }
+                            for line in &summary {
+                                self.command_line
+                                    .push_info(crate::tf!("{edit}: {line}").as_ref());
+                            }
+                            self.command_line.push_output(
+                                crate::tf!(
+                                    "{edit}: changed {changed} mesh(es); {} unchanged, skipped, or rejected.",
+                                    total_meshes.saturating_sub(changed)
+                                )
+                                .as_ref(),
+                            );
+                        }
+                    }
+                }
+            }
+
             // ── QSELECT — quick-select entities by property ───────────────────
             // QSELECT TYPE <type>          — select all entities of given type
             // QSELECT LAYER <name>         — select all entities on layer

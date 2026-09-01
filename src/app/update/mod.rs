@@ -1950,6 +1950,61 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            // ── 3MF Core export ───────────────────────────────────────────
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ThreeMfExport => {
+                let i = self.active_tab;
+                let has_meshes = self.tabs[i]
+                    .scene
+                    .document
+                    .entities()
+                    .any(|entity| matches!(entity, acadrust::EntityType::Mesh(_)));
+                if !has_meshes {
+                    self.command_line.push_error(
+                        crate::t!("EXPORT3MF: no MESH entities in this drawing.").as_ref(),
+                    );
+                    return Task::none();
+                }
+                Task::perform(
+                    async {
+                        crate::sys::file_dialog()
+                            .set_title("Export 3MF")
+                            .set_file_name("export.3mf")
+                            .add_filter("3MF Models", &["3mf", "3MF"])
+                            .add_filter("All Files", &["*"])
+                            .save_file()
+                            .await
+                            .map(|h| crate::sys::handle_path(&h))
+                    },
+                    Message::ThreeMfExportPath,
+                )
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ThreeMfExportPath(Some(path)) => self.on_three_mf_export_path_some(path),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ThreeMfExportPath(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ThreeMfExportFinished(path, result) => {
+                match result {
+                    Ok(summary) => self.command_line.push_output(
+                        crate::tf!("EXPORT3MF: exported to \"{}\" — {summary}", path.display())
+                            .as_ref(),
+                    ),
+                    Err(error) => self
+                        .command_line
+                        .push_error(crate::tf!("EXPORT3MF: {error}").as_ref()),
+                }
+                Task::none()
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            Message::ThreeMfExport
+            | Message::ThreeMfExportPath(_)
+            | Message::ThreeMfExportFinished(_, _) => Task::none(),
+
             // ── OBJ import ────────────────────────────────────────────────
             Message::ObjImport => Task::perform(
                 async {

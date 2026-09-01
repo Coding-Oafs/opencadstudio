@@ -3047,6 +3047,13 @@ pub enum Message {
     /// Callback after the user picks (or cancels) the STEP save path.
     StepExportPath(Option<std::path::PathBuf>),
     StepExportFinished(std::path::PathBuf, Result<(), String>),
+    // ── 3MF export ────────────────────────────────────────────────────────
+    /// Trigger 3MF Core export: show save dialog (native only).
+    ThreeMfExport,
+    /// Callback after the user picks (or cancels) the 3MF save path.
+    ThreeMfExportPath(Option<std::path::PathBuf>),
+    /// Callback with a pre-formatted export summary (native only).
+    ThreeMfExportFinished(std::path::PathBuf, Result<String, String>),
     // ── OBJ import ────────────────────────────────────────────────────────
     /// Trigger OBJ import: show open-file dialog.
     ObjImport,

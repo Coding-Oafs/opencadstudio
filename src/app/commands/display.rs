@@ -605,6 +605,12 @@ impl OpenCADStudio {
                 return Some(Task::done(Message::StepExport));
             }
 
+            // ── 3MF Core export (round-trips 3MF imports) ─────────────────
+            #[cfg(not(target_arch = "wasm32"))]
+            "EXPORT3MF" | "THREEMFOUT" | "3MFOUT" => {
+                return Some(Task::done(Message::ThreeMfExport));
+            }
+
             // ── Plot Style Editor GUI ─────────────────────────────────────
             "PLOTSTYLEPANEL" | "PLOTSTYLEEDITOR" | "STYLESMANAGER" => {
                 return Some(Task::done(Message::PlotStylePanelOpen));
@@ -1354,7 +1360,6 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
-            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd == "POINTCLOUDDTM" || cmd.starts_with("POINTCLOUDDTM ") => {
                 let value = cmd.trim_start_matches("POINTCLOUDDTM").trim();
                 let cell_size = if value.is_empty() {
@@ -1433,6 +1438,49 @@ impl OpenCADStudio {
                     .unwrap_or(1.0);
                 self.generate_point_cloud_contours(i, interval);
             }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd == "POINTCLOUDBREAKLINECHECK"
+                || cmd.starts_with("POINTCLOUDBREAKLINECHECK ") =>
+            {
+                let argument = cmd.trim_start_matches("POINTCLOUDBREAKLINECHECK").trim();
+                let max_grade = if argument.is_empty() {
+                    Some(None)
+                } else {
+                    argument.parse::<f64>().ok().map(Some)
+                };
+                match max_grade {
+                    Some(max_grade) => self.validate_selected_breaklines(i, max_grade),
+                    None => self.command_line.push_error(
+                        "Usage: POINTCLOUDBREAKLINECHECK [maximum-grade-rise-over-run]",
+                    ),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSURFACEAT ") => {
+                let values: Result<Vec<f64>, _> = cmd
+                    .trim_start_matches("POINTCLOUDSURFACEAT")
+                    .split_whitespace()
+                    .map(str::parse::<f64>)
+                    .collect();
+                match values {
+                    Ok(values) if values.len() == 2 || values.len() == 3 => {
+                        self.inspect_point_cloud_surface(
+                            i,
+                            [values[0], values[1], values.get(2).copied().unwrap_or(0.0)],
+                        );
+                    }
+                    _ => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDSURFACEAT <X> <Y> [reference-Z]"),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSURFACEAT" => self
+                .command_line
+                .push_error("Usage: POINTCLOUDSURFACEAT <X> <Y> [reference-Z]"),
 
             #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd == "POINTCLOUDDRAPE" || cmd.starts_with("POINTCLOUDDRAPE ") => {

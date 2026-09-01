@@ -462,6 +462,11 @@ pub fn view_window(
             action("Classify Ground", "POINTCLOUDGROUND", attached),
             action("Contours (1 unit)", "POINTCLOUDCONTOUR 1", attached),
             action("Drape CAD Selection", "POINTCLOUDDRAPE 1 0", attached),
+            action(
+                "Validate Breaklines",
+                "POINTCLOUDBREAKLINECHECK",
+                attached,
+            ),
             action("Export DTM", "POINTCLOUDDTM 1", attached),
             action("Export DSM", "POINTCLOUDDSM 1", attached),
             action("Export Hillshade", "POINTCLOUDHILLSHADE 1", attached),

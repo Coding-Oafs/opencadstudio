@@ -1,5 +1,31 @@
 # v1.0 — Basemap, spatial settings, measurement, navigation, and release
 
+## v2.1.0 3D completion — mesh editing, 3MF round trip, and terrain integration
+
+### Week 2 — practical mesh editing
+- [x] Topology module `src/entities/mesh_topology.rs`: undirected edge/face adjacency with per-face directions, boundary edge count + validated boundary loops, non-manifold edges, invalid-index/degenerate/duplicate faces, isolated vertices, face-connected components, watertight check, orientation-conflict count; 12 deterministic tests
+- [x] Repair operations (pure, deterministic): `weld_vertices` (exact or tolerance via 27-cell spatial hash, drops collapsed/duplicate faces, compacts), `fill_small_holes` (3/4-edge single face, longer centroid fan, winding opposes the boundary, refuses non-manifold boundaries), `delete_faces` (+compaction), `orient_consistently` (BFS winding propagation over manifold edges)
+- [x] Commands (inquiry.rs, FLATTEN pattern): `MESHDIAGNOSE` (report lines per mesh), `MESHWELD [tol]`, `MESHFILL [max-edges=8]`, `MESHFLIP`, `MESHORIENT`, `MESHDELETEFACE <i…>` — selection-scoped, `push_undo_snapshot`/`update_entity` (before-image undo + per-handle LOD/caches rebuild only), face-count guards (5M diagnose / 1M edit)
+- [x] Object move/rotate/scale already route through MOVE/ROTATE/SCALE via `Transformable for Mesh`; vertex moves via existing grip plumbing
+- [ ] Deferred: interactive vertex/edge/face pick modes + hover overlays, component/block hierarchy preservation, decimated-proxy editing workflow
+
+### Week 3 — 3MF round-trip and model organization
+- [x] `export_path` (io/three_mf.rs): conforming Core package ([Content_Types], StartPart rels, model part) — header units reverse-mapped, layer names → object names, entity colors → basematerials, fan-triangulated polygon faces, streamed through a 1 MiB BufWriter, validated indices/counts, and atomic replacement that preserves an existing file on failure
+- [x] `EXPORT3MF`/`THREEMFOUT`/`3MFOUT` command + save dialog + background worker; exports exact source MESH entities, not display LODs; wasm-gated like the importer
+- [x] `ImportOptions { center_model, unit_override, preserve_materials }` + `import_path_with_options`; defaults preserve current behaviour
+- [x] Round-trip gate: unit test (2 meshes, quad + tri, colors/units/bounds) and opt-in `roundtrips_external_stress_fixture`
+- [x] Real-fixture result (release, this machine): Palo Alto model → export + re-import of 85 entities / 4.37M triangles / 2.27M vertices with identical bounds and units in ~15 s
+- [ ] Deferred: component hierarchy as CAD blocks, import option UI, background cancellation + memory budgeting, repair-on-copy option in export flow
+
+### Weeks 4–5 production terrain and integration slice
+- [x] Persist DTM/DSM/hillshade products in `.ocsproj` with output fingerprint, source relationship, CRS, resolution, dimensions, point count, tool version, and regeneration recipe
+- [x] `POINTCLOUDBREAKLINECHECK [max-grade]` for crossings, duplicate vertices, zero-length segments, and elevation spikes
+- [x] `POINTCLOUDSURFACEAT <X> <Y> [Z]` for interpolated surface elevation and signed vertical distance
+- [x] Extend `POINTCLOUDDRAPE` to arcs, circles, ellipses, splines, closed paths, and MESH copies with atomic coverage failure and a 1M-vertex interactive mesh ceiling
+- [x] Point-cloud manager entry point, command autocomplete, shared CRS/local-origin model, bounded GPU/CPU point budgets, cross-section workflow, and full-density raster background jobs
+- [x] Real Boston HIGH fixture: 112 entities / 4,418,386 triangles / 2,373,706 vertices round-trip with equivalent bounds and units; full render-cache build passes
+- [ ] Post-v2.1.0: interactive sub-object overlays, component hierarchy as blocks, constrained-Delaunay surface rebuild, image/corridor draping, cut/fill and difference heat maps, GPU occlusion culling, signed release automation
+
 ## v2.1.0 — 3D plan Week 1: 3MF import + terrain draping (docs/3d-development-plan.md)
 
 - [x] Surface-sampling/path-draping API in ocs_pointcloud (measurement.rs): validation, 1M-point ceiling, vertical offset, atomic failure; 4 unit tests

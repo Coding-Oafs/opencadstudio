@@ -17,7 +17,7 @@ use ocs_pointcloud::{
     classification_statistics, parse_ptc, select_brush, select_nearest, select_polygon,
     sidecar_path_for_drawing, write_ptc, AttachmentState, ClassTable, ColorMode, Density,
     DisplaySettings, EditStore, ExportStats, PointFilter, PointPatch, PointSample, SampleOptions,
-    SelectionSet, SidecarStore, TileCacheManifest, TileCacheOptions,
+    SelectionSet, SidecarStore, SurfaceSampler, TileCacheManifest, TileCacheOptions,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -41,13 +41,15 @@ fn entity_drape_source(entity: &acadrust::EntityType) -> Option<DrapeSourcePath>
     use acadrust::EntityType;
 
     let (mut points, closed) = match entity {
-        EntityType::Line(_) | EntityType::LwPolyline(_) | EntityType::Polyline2D(_) => {
+        EntityType::Line(_)
+        | EntityType::Arc(_)
+        | EntityType::Circle(_)
+        | EntityType::Ellipse(_)
+        | EntityType::Spline(_)
+        | EntityType::LwPolyline(_)
+        | EntityType::Polyline2D(_) => {
             let curve = crate::entities::curve::entity_curve(entity)?;
-            let closed = match entity {
-                EntityType::LwPolyline(polyline) => polyline.is_closed,
-                EntityType::Polyline2D(polyline) => polyline.is_closed(),
-                _ => false,
-            };
+            let closed = curve.is_closed();
             (crate::entities::curve::curve_points(&curve), closed)
         }
         EntityType::Polyline(polyline) => (
@@ -543,11 +545,12 @@ impl PointCloudSurfaceProduct {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceJobSummary {
     pub rows: usize,
     pub columns: usize,
     pub selected_points: u64,
+    pub cell_size: f64,
 }
 
 impl OpenCADStudio {
@@ -601,7 +604,21 @@ impl OpenCADStudio {
             job.id = job_id.clone();
             job.inputs = vec![source_path.to_string_lossy().into_owned()];
             job.outputs = vec![output.clone()];
-            job.parameters = serde_json::json!({ "cell_size": cell_size, "extent": extent });
+            job.parameters = serde_json::json!({
+                "cell_size": cell_size,
+                "extent": extent,
+                "filter": filter,
+                "classification": if product == PointCloudSurfaceProduct::Dtm {
+                    serde_json::json!(2)
+                } else {
+                    serde_json::Value::Null
+                },
+                "statistic": if product == PointCloudSurfaceProduct::Dtm {
+                    "minimum"
+                } else {
+                    "maximum"
+                }
+            });
             job.start().ok();
             project.jobs.push(job);
             let _ = project.save_atomic(project_path.clone());
@@ -641,6 +658,7 @@ impl OpenCADStudio {
                         rows: surface.rows,
                         columns: surface.columns,
                         selected_points: progress.selected,
+                        cell_size,
                     })
                 })
                 .map_err(|error| error.to_string());
@@ -675,13 +693,27 @@ impl OpenCADStudio {
             .active()
             .map(|source| vec![source.source_path.to_string_lossy().into_owned()])
             .unwrap_or_default();
+        let source_id = self.tabs[tab_index]
+            .point_cloud
+            .active()
+            .map(|source| source.id.clone());
+        let drawing_crs = self.tabs[tab_index]
+            .spatial
+            .drawing_crs
+            .as_ref()
+            .map(crate::app::spatial::DrawingCrs::as_crs_info)
+            .unwrap_or_default();
         if let Some((project_path, project)) = self.tabs[tab_index].spatial_project.as_mut() {
-            if let Some(job) = project.jobs.iter_mut().find(|job| job.id == job_id) {
+            let job_recipe = if let Some(job) = project.jobs.iter_mut().find(|job| job.id == job_id)
+            {
                 match &result {
                     Ok(_) => job.complete(),
                     Err(error) => job.fail(error),
                 }
-            }
+                job.parameters.clone()
+            } else {
+                serde_json::Value::Null
+            };
             project
                 .history
                 .push(ocs_pointcloud::ProcessingHistoryEntry {
@@ -695,7 +727,18 @@ impl OpenCADStudio {
                     tool_id: format!("lidar.surface.{}", product.label().to_ascii_lowercase()),
                     inputs: history_inputs,
                     outputs: vec![output.to_string_lossy().into_owned()],
-                    parameters: serde_json::Value::Null,
+                    parameters: result.as_ref().map_or(serde_json::Value::Null, |summary| {
+                        serde_json::json!({
+                            "recipe": job_recipe,
+                            "output": {
+                                "cell_size": summary.cell_size,
+                                "rows": summary.rows,
+                                "columns": summary.columns,
+                                "selected_points": summary.selected_points,
+                                "source_fingerprint_required": true
+                            }
+                        })
+                    }),
                     software_version: env!("CARGO_PKG_VERSION").to_string(),
                     crs_transformations: Vec::new(),
                     status: if result.is_ok() {
@@ -706,6 +749,53 @@ impl OpenCADStudio {
                     .to_string(),
                     detail: result_text.clone(),
                 });
+            if let (Ok(summary), Some(source_id)) = (&result, source_id) {
+                let kind = if product == PointCloudSurfaceProduct::Hillshade {
+                    ocs_pointcloud::SourceKind::Raster
+                } else {
+                    ocs_pointcloud::SourceKind::Terrain
+                };
+                match ocs_pointcloud::ProjectSource::local(
+                    job_id.clone(),
+                    project_path.clone(),
+                    &output,
+                    kind,
+                ) {
+                    Ok(mut surface) => {
+                        surface.name = format!("{} surface", product.label());
+                        surface.crs = drawing_crs;
+                        surface.derived_from = vec![source_id];
+                        surface.read_only = false;
+                        surface.tags.extend([
+                            "surface".to_string(),
+                            product.label().to_ascii_lowercase(),
+                        ]);
+                        surface.metadata.insert(
+                            "recipe".to_string(),
+                            serde_json::json!({
+                                "tool": format!("lidar.surface.{}", product.label().to_ascii_lowercase()),
+                                "parameters": job_recipe,
+                                "output": {
+                                    "cell_size": summary.cell_size,
+                                    "rows": summary.rows,
+                                    "columns": summary.columns,
+                                    "selected_points": summary.selected_points
+                                },
+                                "software_version": env!("CARGO_PKG_VERSION")
+                            }),
+                        );
+                        project.sources.retain(|source| source.id != surface.id);
+                        project.sources.push(surface);
+                    }
+                    Err(error) => self.command_line.push_error(
+                        format!(
+                            "POINTCLOUD{}: surface was written but project provenance could not be recorded: {error}",
+                            product.label().to_ascii_uppercase()
+                        )
+                        .as_str(),
+                    ),
+                }
+            }
             let _ = project.save_atomic(project_path.clone());
         }
         match result {
@@ -4420,7 +4510,7 @@ impl OpenCADStudio {
         );
     }
 
-    /// Creates terrain-following 3D polyline copies of the selected CAD paths.
+    /// Creates terrain-following copies of selected CAD paths and meshes.
     /// Source entities are never modified. Every eligible entity is sampled
     /// before the first output is committed, so a coverage failure cannot leave
     /// a partially draped command in the drawing.
@@ -4454,16 +4544,25 @@ impl OpenCADStudio {
             .map(|(_, entity)| entity.clone())
             .collect();
         if selected.is_empty() {
-            self.command_line
-                .push_error("POINTCLOUDDRAPE: select one or more lines or polylines first.");
+            self.command_line.push_error(
+                "POINTCLOUDDRAPE: select one or more curves, polylines, or meshes first.",
+            );
             return;
         }
         let source_paths: Vec<DrapeSourcePath> =
             selected.iter().filter_map(entity_drape_source).collect();
-        let skipped = selected.len().saturating_sub(source_paths.len());
-        if source_paths.is_empty() {
+        let source_meshes: Vec<acadrust::entities::mesh::Mesh> = selected
+            .iter()
+            .filter_map(|entity| match entity {
+                acadrust::EntityType::Mesh(mesh) => Some(mesh.clone()),
+                _ => None,
+            })
+            .collect();
+        let supported = source_paths.len() + source_meshes.len();
+        let skipped = selected.len().saturating_sub(supported);
+        if supported == 0 {
             self.command_line.push_error(
-                "POINTCLOUDDRAPE: the selection contains no supported line or polyline paths.",
+                "POINTCLOUDDRAPE: the selection contains no supported curves, polylines, or meshes.",
             );
             return;
         }
@@ -4498,7 +4597,8 @@ impl OpenCADStudio {
         };
         let triangle_count = tin.triangle_count();
 
-        let mut outputs = Vec::with_capacity(source_paths.len());
+        const MAX_DRAPED_MESH_VERTICES: usize = 1_000_000;
+        let mut outputs = Vec::with_capacity(supported);
         let mut output_points = 0_usize;
         for (path_index, source) in source_paths.iter().enumerate() {
             let draped = match ocs_pointcloud::drape_path(
@@ -4532,6 +4632,37 @@ impl OpenCADStudio {
                 polyline.close();
             }
             outputs.push(acadrust::EntityType::Polyline3D(polyline));
+        }
+        for (mesh_index, mut mesh) in source_meshes.into_iter().enumerate() {
+            if mesh.vertices.len() > MAX_DRAPED_MESH_VERTICES {
+                self.command_line.push_error(
+                    format!(
+                        "POINTCLOUDDRAPE: mesh {} has {} vertices (interactive limit {}); no draped entities were added.",
+                        mesh_index + 1,
+                        mesh.vertices.len(),
+                        MAX_DRAPED_MESH_VERTICES
+                    )
+                    .as_str(),
+                );
+                return;
+            }
+            for (vertex_index, vertex) in mesh.vertices.iter_mut().enumerate() {
+                let Some(elevation) = tin.elevation_at(vertex.x, vertex.y) else {
+                    self.command_line.push_error(
+                        format!(
+                            "POINTCLOUDDRAPE: mesh {} vertex {} lies outside the terrain surface; no draped entities were added.",
+                            mesh_index + 1,
+                            vertex_index
+                        )
+                        .as_str(),
+                    );
+                    return;
+                };
+                vertex.z = elevation + vertical_offset;
+            }
+            output_points = output_points.saturating_add(mesh.vertices.len());
+            mesh.common.handle = acadrust::Handle::NULL;
+            outputs.push(acadrust::EntityType::Mesh(mesh));
         }
 
         let delta_safe = outputs
@@ -4568,8 +4699,125 @@ impl OpenCADStudio {
         };
         self.command_line.push_output(
             format!(
-                "POINTCLOUDDRAPE: created {} 3D polyline(s) with {output_points} points from a {triangle_count}-triangle TIN over {surface_label}; spacing {spacing}, vertical offset {vertical_offset}{skipped_note}.",
+                "POINTCLOUDDRAPE: created {} terrain-draped object(s) with {output_points} sampled vertices from a {triangle_count}-triangle TIN over {surface_label}; curve spacing {spacing}, vertical offset {vertical_offset}{skipped_note}.",
                 created_handles.len()
+            )
+            .as_str(),
+        );
+    }
+
+    /// Reports an interpolated terrain elevation and optional signed vertical
+    /// distance using the same resident ground TIN as interactive draping.
+    pub(super) fn inspect_point_cloud_surface(&mut self, tab_index: usize, point: [f64; 3]) {
+        if !point.into_iter().all(f64::is_finite) {
+            self.command_line
+                .push_error("POINTCLOUDSURFACEAT: coordinates must be finite.");
+            return;
+        }
+        let dataset = &self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
+            self.command_line
+                .push_error("POINTCLOUDSURFACEAT: attach a LAS/LAZ cloud first.");
+            return;
+        }
+        let mut ground = Vec::new();
+        let mut all = Vec::new();
+        for source in &dataset.sources {
+            for point in source.active_points() {
+                let point = source
+                    .edits
+                    .patch_for(point.source_index)
+                    .map_or(point.clone(), |patch| point.with_patch(patch));
+                if point.classification == 2 {
+                    ground.push(point.clone());
+                }
+                all.push(point);
+            }
+        }
+        let (points, label) = if ground.len() >= 3 {
+            (ground, "class-2 ground")
+        } else {
+            (all, "all resident points")
+        };
+        let Some(tin) = ocs_pointcloud::Tin::from_points(&points, None) else {
+            self.command_line
+                .push_error("POINTCLOUDSURFACEAT: not enough points to build a surface.");
+            return;
+        };
+        let Some(measurement) = ocs_pointcloud::point_to_surface(point, &tin) else {
+            self.command_line.push_error(
+                "POINTCLOUDSURFACEAT: XY coordinate is outside the resident terrain surface.",
+            );
+            return;
+        };
+        self.command_line.push_output(
+            format!(
+                "POINTCLOUDSURFACEAT: ({:.6}, {:.6}) elevation {:.6} over {label}; input Z {:.6}, signed vertical distance {:.6}.",
+                point[0],
+                point[1],
+                measurement.surface_elevation,
+                point[2],
+                measurement.signed_vertical_distance
+            )
+            .as_str(),
+        );
+    }
+
+    /// Validates selected CAD curves as 3D terrain breaklines.
+    pub(super) fn validate_selected_breaklines(
+        &mut self,
+        tab_index: usize,
+        max_grade: Option<f64>,
+    ) {
+        if max_grade.is_some_and(|value| !value.is_finite() || value < 0.0) {
+            self.command_line.push_error(
+                "POINTCLOUDBREAKLINECHECK: maximum grade must be finite and non-negative.",
+            );
+            return;
+        }
+        let lines: Vec<ocs_pointcloud::Breakline> = self.tabs[tab_index]
+            .scene
+            .selected_entities()
+            .into_iter()
+            .filter_map(|(handle, entity)| {
+                entity_drape_source(entity).map(|path| ocs_pointcloud::Breakline {
+                    id: handle.to_string(),
+                    vertices: path.points,
+                    closed: path.closed,
+                })
+            })
+            .collect();
+        if lines.is_empty() {
+            self.command_line.push_error(
+                "POINTCLOUDBREAKLINECHECK: select one or more finite CAD curves or polylines.",
+            );
+            return;
+        }
+        let issues = ocs_pointcloud::validate_breaklines(&lines, max_grade);
+        for issue in issues.iter().take(100) {
+            let segment = issue
+                .segment
+                .map(|value| format!(" segment {value}"))
+                .unwrap_or_default();
+            self.command_line.push_info(
+                format!(
+                    "POINTCLOUDBREAKLINECHECK: breakline {}{segment}: {:?}: {}",
+                    issue.breakline_id, issue.kind, issue.detail
+                )
+                .as_str(),
+            );
+        }
+        let truncated = issues.len().saturating_sub(100);
+        self.command_line.push_output(
+            format!(
+                "POINTCLOUDBREAKLINECHECK: validated {} breakline(s); {} issue(s){}.",
+                lines.len(),
+                issues.len(),
+                if truncated > 0 {
+                    format!(" ({truncated} additional issue(s) omitted)")
+                } else {
+                    String::new()
+                }
             )
             .as_str(),
         );
@@ -6794,6 +7042,17 @@ mod tests {
             .expect("polyline path");
         assert!(path.closed);
         assert!(path.points.len() > 3, "the bulged edge must be tessellated");
+        assert_ne!(path.points.first(), path.points.last());
+    }
+
+    #[test]
+    fn circle_is_a_closed_drape_source_without_duplicate_endpoint() {
+        let mut circle = acadrust::entities::Circle::new();
+        circle.center = acadrust::types::Vector3::new(10.0, 20.0, 3.0);
+        circle.radius = 5.0;
+        let path = entity_drape_source(&acadrust::EntityType::Circle(circle)).expect("circle path");
+        assert!(path.closed);
+        assert!(path.points.len() >= 16);
         assert_ne!(path.points.first(), path.points.last());
     }
 
