@@ -455,6 +455,21 @@ pub fn view_window(
     }
     let urban = urban.spacing(6);
 
+    let terrain = column![
+        text("Build terrain products from resident points. Drape uses the current CAD line/polyline selection and creates new 3D polylines.")
+            .size(11),
+        row![
+            action("Classify Ground", "POINTCLOUDGROUND", attached),
+            action("Contours (1 unit)", "POINTCLOUDCONTOUR 1", attached),
+            action("Drape CAD Selection", "POINTCLOUDDRAPE 1 0", attached),
+            action("Export DTM", "POINTCLOUDDTM 1", attached),
+            action("Export DSM", "POINTCLOUDDSM 1", attached),
+            action("Export Hillshade", "POINTCLOUDHILLSHADE 1", attached),
+        ]
+        .spacing(6),
+    ]
+    .spacing(7);
+
     let edit = column![
         text("Viewport tools select displayed points in screen space; edits target stable LAS source indices.")
         .size(11),
@@ -560,6 +575,7 @@ pub fn view_window(
         section("Attachment and jobs", overview),
         section("GPU display", display),
         section("CRS and survey safeguards", coordinates),
+        section("Terrain and CAD draping", terrain),
         section("Urban classification", urban),
         section("Selection and sparse edits", edit),
         section("Editable class table and displayed statistics", class_rows),

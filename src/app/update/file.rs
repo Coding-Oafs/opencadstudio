@@ -1061,6 +1061,9 @@ impl OpenCADStudio {
             .unwrap_or(0);
         self.command_line
             .push_output(crate::tf!("Opened \"{name}\" — {entity_count} entities").as_ref());
+        for line in &caches.three_mf_report {
+            self.command_line.push_info(line);
+        }
         if caches.corrupt_dropped > 0 {
             self.command_line.push_error(
                 crate::tf!(
@@ -1158,10 +1161,24 @@ impl OpenCADStudio {
             .opening
             .as_ref()
             .and_then(|opening| opening.fingerprint.clone());
-        self.tabs[i].current_path = Some(path.clone());
-        self.load_spatial_settings(i);
-        #[cfg(not(target_arch = "wasm32"))]
-        self.install_native_edit_guard(i, &path, opened_fingerprint);
+        let imported_three_mf = path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("3mf"));
+        if imported_three_mf {
+            // 3MF is imported into persistent CAD MESH entities. Keep the
+            // source in Recents, but make this an unsaved drawing so QSAVE
+            // cannot accidentally route a CAD writer over the source package.
+            self.tabs[i].current_path = None;
+            self.tabs[i].tab_title = path
+                .file_stem()
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "3MF model".to_string());
+        } else {
+            self.tabs[i].current_path = Some(path.clone());
+            self.load_spatial_settings(i);
+            #[cfg(not(target_arch = "wasm32"))]
+            self.install_native_edit_guard(i, &path, opened_fingerprint);
+        }
         self.tabs[i].scene.material_base_dir = path.parent().map(std::path::Path::to_path_buf);
         self.tabs[i].scene.document = doc;
         // DWG stores CLAYER as a layer handle. Resolve it back to the layer
@@ -1306,12 +1323,29 @@ impl OpenCADStudio {
         // selected — see #21.
         self.sync_ribbon_from_selection();
         self.tabs[i].scene.restore_saved_camera();
+        if imported_three_mf {
+            // 3MF is a surface-mesh format, so a shaded, fitted model view is
+            // the useful first presentation. Persist the visual style on the
+            // active model tile just like the ribbon command does.
+            use acadrust::entities::ViewportRenderMode;
+            // Do not enable triangulation edges by default. A detailed 3MF
+            // terrain can contain millions of tiny triangles; drawing every
+            // internal edge in black hides the shaded model under a dense,
+            // apparently corrupt scribble.
+            let mode = ViewportRenderMode::GouraudShaded;
+            self.tabs[i].render_mode = mode;
+            self.tabs[i].wireframe = false;
+            self.tabs[i].visual_style = "Gouraud Shaded".into();
+            self.tabs[i].scene.set_active_model_tile_render_mode(mode);
+            self.tabs[i].scene.fit_all();
+            self.ribbon.set_wireframe(false);
+        }
         // Grid/snap are per-drawing view settings — adopt the opened
         // file's active viewport state rather than a global preference.
         self.adopt_view_display(i);
         self.sync_render_mode_to_active_tile(i);
         self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
-        self.tabs[i].dirty = document_repaired;
+        self.tabs[i].dirty = document_repaired || imported_three_mf;
         self.tabs[i].recovery_save_as_required = document_repaired;
         self.tabs[i].history = crate::app::document::HistoryState::default();
         self.refresh_properties();

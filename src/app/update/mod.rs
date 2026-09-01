@@ -613,7 +613,7 @@ impl OpenCADStudio {
                     .extension()
                     .map(|e| e.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
-                if !matches!(ext.as_str(), "dwg" | "dxf" | "bak" | "sv$") {
+                if !matches!(ext.as_str(), "dwg" | "dxf" | "3mf" | "bak" | "sv$") {
                     self.command_line.push_error(
                         crate::tf!("Unsupported file type: {}", path.display()).as_ref(),
                     );
@@ -1165,7 +1165,8 @@ impl OpenCADStudio {
                             definition.name,
                             definition.nodes.len()
                         );
-                        self.command_line.push_info("WORKFLOW: definition validated and saved.");
+                        self.command_line
+                            .push_info("WORKFLOW: definition validated and saved.");
                     }
                     Err(error) => {
                         self.platform_manager.status = format!("Workflow error: {error}");
@@ -1266,10 +1267,8 @@ impl OpenCADStudio {
                                 &serde_json::to_string_pretty(&package).unwrap_or_default(),
                             );
                         self.save_spatial_project(self.active_tab, None);
-                        self.platform_manager.status = format!(
-                            "Standards '{}' validated, sealed, and saved.",
-                            package.name
-                        );
+                        self.platform_manager.status =
+                            format!("Standards '{}' validated, sealed, and saved.", package.name);
                         self.command_line
                             .push_info("STANDARDS: package validated and saved.");
                     }
@@ -1322,7 +1321,8 @@ impl OpenCADStudio {
                             project.platform.trusted_signers.insert(signer);
                             self.save_spatial_project(self.active_tab, None);
                             self.platform_manager.status =
-                                "Signer trusted for this spatial project; Apply is now enabled.".into();
+                                "Signer trusted for this spatial project; Apply is now enabled."
+                                    .into();
                         }
                         None => {
                             self.platform_manager.status =
@@ -1356,7 +1356,8 @@ impl OpenCADStudio {
             #[cfg(not(target_arch = "wasm32"))]
             Message::PlatformStandardsImportPicked(Some(path)) => {
                 match std::fs::read_to_string(&path) {
-                    Ok(json) => match serde_json::from_str::<ocs_platform::StandardsPackage>(&json) {
+                    Ok(json) => match serde_json::from_str::<ocs_platform::StandardsPackage>(&json)
+                    {
                         Ok(package) => {
                             self.platform_manager.standards =
                                 iced::widget::text_editor::Content::with_text(

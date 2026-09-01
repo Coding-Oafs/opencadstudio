@@ -52,15 +52,16 @@
 
 ## Overview
 
-Open CAD Studio is a cross-platform geospatial engineering workstation. It moves from surveyed reality and native feature data into precise CAD drawings, surfaces, models, and auditable deliverables while keeping source data local and external. It reads and writes DWG and DXF natively and shares selected editing and viewing cores with the browser build.
+Open CAD Studio is a cross-platform geospatial engineering workstation. It moves from surveyed reality and native feature data into precise CAD drawings, surfaces, models, and auditable deliverables while keeping source data local and external. It reads and writes DWG and DXF natively, imports 3MF surface models on desktop, and shares selected editing and viewing cores with the browser build.
 
-The current release line is **v2.0.0**. See the [v1.1→v2 development audit](docs/development-audit-v2.md) and [v2.0.0 release notes](docs/v2.0.0-release-notes.md) for the implemented stage gates and verification record.
+The current release line is **v2.1.0**. See the [v1.1→v2 development audit](docs/development-audit-v2.md), the [v2.0.0 release notes](docs/v2.0.0-release-notes.md), and the [v2.1.0 release notes](docs/v2.1.0-release-notes.md) for the implemented stage gates and verification record.
 
 The project is under active development. Keep backups of important production drawings and report reproducible problems through [GitHub Issues](https://github.com/HakanSeven12/OpenCADStudio/issues).
 
 ## Highlights
 
 - **Native drawing workflow** — open, edit, recover, and save DWG and DXF files without a conversion service.
+- **Large 3MF model import** — stream core 3MF meshes, materials, components, units, and transforms into editable CAD mesh entities with generated display LODs.
 - **Precise 2D drafting** — lines, polylines, curves, splines, hatches, object snaps, tracking, layers, blocks, and external references.
 - **Documentation tools** — text, dimensions, leaders, tolerances, tables, model space, paper space, viewports, and plot styles.
 - **Kernel-backed 3D modeling** — solid primitives, extrusion, revolution, sweep, loft, Boolean operations, and ACIS entity tessellation.
@@ -105,7 +106,7 @@ Download all current packages from the [latest release](https://github.com/Hakan
 
 Choose one of these signed x86-64 packages:
 
-- `OpenCADStudio-*-windows-x86_64-installer.msi` — recommended installer with Start Menu shortcuts, DWG/DXF file associations, and drawing thumbnails.
+- `OpenCADStudio-*-windows-x86_64-installer.msi` — recommended installer with Start Menu shortcuts, DWG/DXF/3MF file associations, and drawing thumbnails.
 - `OpenCADStudio-*-windows-x86_64-portable.exe` — standalone application; no installation required.
 
 ### Linux

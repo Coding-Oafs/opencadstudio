@@ -639,6 +639,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "POINTCLOUDCONTOUR",
         "POINTCLOUDCRS",
         "POINTCLOUDDENSITY",
+        "POINTCLOUDDRAPE",
         "POINTCLOUDDSM",
         "POINTCLOUDE57IMPORT",
         "POINTCLOUDDETACH",

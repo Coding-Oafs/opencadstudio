@@ -1435,6 +1435,27 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd == "POINTCLOUDDRAPE" || cmd.starts_with("POINTCLOUDDRAPE ") => {
+                let arguments = cmd.trim_start_matches("POINTCLOUDDRAPE").trim();
+                let fields: Vec<_> = arguments.split_whitespace().collect();
+                if fields.len() > 2 {
+                    self.command_line
+                        .push_error("Usage: POINTCLOUDDRAPE [positive-spacing] [vertical-offset]");
+                    return Some(Task::none());
+                }
+                let spacing = fields.first().map_or(Ok(1.0), |value| value.parse::<f64>());
+                let vertical_offset = fields.get(1).map_or(Ok(0.0), |value| value.parse::<f64>());
+                match (spacing, vertical_offset) {
+                    (Ok(spacing), Ok(vertical_offset)) => {
+                        self.drape_selected_to_point_cloud(i, spacing, vertical_offset);
+                    }
+                    _ => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDDRAPE [positive-spacing] [vertical-offset]"),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDNOISE") => {
                 let arguments = cmd.trim_start_matches("POINTCLOUDNOISE").trim();
                 let mut fields = arguments.split_whitespace();

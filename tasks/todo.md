@@ -1,5 +1,21 @@
 # v1.0 — Basemap, spatial settings, measurement, navigation, and release
 
+## v2.1.0 — 3D plan Week 1: 3MF import + terrain draping (docs/3d-development-plan.md)
+
+- [x] Surface-sampling/path-draping API in ocs_pointcloud (measurement.rs): validation, 1M-point ceiling, vertical offset, atomic failure; 4 unit tests
+- [x] `Tin: SurfaceSampler` bridge (dtm.rs)
+- [x] `POINTCLOUDDRAPE [spacing] [vertical-offset]` command: lines/2D/3D polylines via curve tessellation, class-2 ground TIN with reported fallback, single undoable transaction, atomic across the selection
+- [x] LiDAR manager "Terrain and CAD draping" section (ground/contours/drape/DTM/DSM/hillshade)
+- [x] Streaming 3MF Core importer (io/three_mf.rs): OPC StartPart discovery, quick-xml forward parse, components/build items/transforms, base materials → per-color layers, units → header
+- [x] Package hardening: entries/expansion/path-safety/ratio limits, vertex+triangle ceilings, cycle/depth limits, required-extension rejection
+- [x] Import diagnostics on the command line: objects, units, bounds, materials, components, build items, skipped package parts (threaded io → DerivedCaches → finish_open)
+- [x] 3MF open path: unsaved-drawing semantics (no QSAVE over source), shaded+fit default view, OPEN/recents/file-dialog/boot argv, .3mf installer association (main.wxs)
+- [x] Mesh display LOD fast path (entities/mesh.rs): indexed-triangle direct path, +2 border-locked LODs over 50k triangles; 3 lod_tests incl. large-mesh monotonicity
+- [x] Opt-in fixtures: OCS_3MF_STRESS_FILE import + render-cache + OCS_3MF_STRESS_DIR audit tests
+- [x] Baseline on real fixture (release build, this machine): 48 MB Palo Alto model → 86 objects, 2.27M vertices, 4.37M triangles imported in ~4 s
+- [x] Gates: cargo check, app suite 493, ocs_pointcloud 74, platform 5, spatial 10, shader contract 5, rustfmt on changed files
+- [x] Release: version 2.1.0, release notes, README line, tag + GitHub release (CI MSI/portable/AppImage/snap/dmg)
+
 ## v1.0.4 — full-density LiDAR OOM fix
 
 - [x] Root-cause: `Density::Full` materializes the whole file (unbounded `sample()`); auto cache-activation adds a second streaming copy; resample leaks streamed tiles

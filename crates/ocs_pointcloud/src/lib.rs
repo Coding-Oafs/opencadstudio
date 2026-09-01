@@ -49,8 +49,9 @@ pub use e57_import::{import_e57, E57ImportProgress, E57ImportStage, E57ImportSta
 pub use edit::{EditStore, EditTransaction, PointPatch};
 pub use jobs::{JobCheckpoint, JobQueue, JobRecord, JobStatus, ProtectedOutput};
 pub use measurement::{
-    cloud_to_cloud, point_to_plane, point_to_point, point_to_surface, CloudDistanceStatistics,
-    PlaneMeasurement, SurfaceMeasurement, SurfaceSampler, VectorMeasurement,
+    cloud_to_cloud, drape_path, point_to_plane, point_to_point, point_to_surface,
+    CloudDistanceStatistics, DrapeError, DrapedPath, PlaneMeasurement, SurfaceMeasurement,
+    SurfaceSampler, VectorMeasurement, MAX_DRAPED_PATH_POINTS,
 };
 pub use processing::{
     select_full_density, visit_full_density, FullDensityProgress, ProcessingExtent,

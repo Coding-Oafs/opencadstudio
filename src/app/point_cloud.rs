@@ -28,6 +28,59 @@ use std::{
     },
 };
 
+#[derive(Clone, Debug, PartialEq)]
+struct DrapeSourcePath {
+    points: Vec<[f64; 3]>,
+    closed: bool,
+}
+
+/// Converts supported CAD curve entities to a world-space path. Planar curve
+/// entities go through the existing kernel tessellator so bulged polyline
+/// segments are not silently replaced with chords before terrain sampling.
+fn entity_drape_source(entity: &acadrust::EntityType) -> Option<DrapeSourcePath> {
+    use acadrust::EntityType;
+
+    let (mut points, closed) = match entity {
+        EntityType::Line(_) | EntityType::LwPolyline(_) | EntityType::Polyline2D(_) => {
+            let curve = crate::entities::curve::entity_curve(entity)?;
+            let closed = match entity {
+                EntityType::LwPolyline(polyline) => polyline.is_closed,
+                EntityType::Polyline2D(polyline) => polyline.is_closed(),
+                _ => false,
+            };
+            (crate::entities::curve::curve_points(&curve), closed)
+        }
+        EntityType::Polyline(polyline) => (
+            polyline
+                .vertices
+                .iter()
+                .map(|vertex| [vertex.location.x, vertex.location.y, vertex.location.z])
+                .collect(),
+            polyline.is_closed(),
+        ),
+        EntityType::Polyline3D(polyline) => (
+            polyline
+                .vertices
+                .iter()
+                .map(|vertex| [vertex.position.x, vertex.position.y, vertex.position.z])
+                .collect(),
+            polyline.is_closed(),
+        ),
+        _ => return None,
+    };
+    if closed && points.len() > 2 {
+        let first = points[0];
+        let last = *points.last().expect("checked non-empty path");
+        let duplicate = (first[0] - last[0]).abs() <= 1.0e-12
+            && (first[1] - last[1]).abs() <= 1.0e-12
+            && (first[2] - last[2]).abs() <= 1.0e-12;
+        if duplicate {
+            points.pop();
+        }
+    }
+    (points.len() >= 2).then_some(DrapeSourcePath { points, closed })
+}
+
 impl OpenCADStudio {
     pub(super) fn create_spatial_project(&mut self, tab_index: usize, path: PathBuf) {
         let name = path
@@ -4367,6 +4420,161 @@ impl OpenCADStudio {
         );
     }
 
+    /// Creates terrain-following 3D polyline copies of the selected CAD paths.
+    /// Source entities are never modified. Every eligible entity is sampled
+    /// before the first output is committed, so a coverage failure cannot leave
+    /// a partially draped command in the drawing.
+    pub(super) fn drape_selected_to_point_cloud(
+        &mut self,
+        tab_index: usize,
+        spacing: f64,
+        vertical_offset: f64,
+    ) {
+        const GROUND_CLASS: u8 = 2;
+        if !spacing.is_finite() || spacing <= 0.0 {
+            self.command_line
+                .push_error("POINTCLOUDDRAPE: spacing must be finite and positive.");
+            return;
+        }
+        if !vertical_offset.is_finite() {
+            self.command_line
+                .push_error("POINTCLOUDDRAPE: vertical offset must be finite.");
+            return;
+        }
+        if self.tabs[tab_index].point_cloud.is_empty() {
+            self.command_line
+                .push_error("POINTCLOUDDRAPE: attach a LAS/LAZ cloud first.");
+            return;
+        }
+
+        let selected: Vec<acadrust::EntityType> = self.tabs[tab_index]
+            .scene
+            .selected_entities()
+            .into_iter()
+            .map(|(_, entity)| entity.clone())
+            .collect();
+        if selected.is_empty() {
+            self.command_line
+                .push_error("POINTCLOUDDRAPE: select one or more lines or polylines first.");
+            return;
+        }
+        let source_paths: Vec<DrapeSourcePath> =
+            selected.iter().filter_map(entity_drape_source).collect();
+        let skipped = selected.len().saturating_sub(source_paths.len());
+        if source_paths.is_empty() {
+            self.command_line.push_error(
+                "POINTCLOUDDRAPE: the selection contains no supported line or polyline paths.",
+            );
+            return;
+        }
+
+        let dataset = &self.tabs[tab_index].point_cloud;
+        let mut ground_points = Vec::new();
+        let mut all_points = Vec::new();
+        for source in &dataset.sources {
+            for point in source.active_points() {
+                let point = match source.edits.patch_for(point.source_index) {
+                    Some(patch) => point.with_patch(patch),
+                    None => point,
+                };
+                if point.classification == GROUND_CLASS {
+                    ground_points.push(point.clone());
+                }
+                all_points.push(point);
+            }
+        }
+        let (surface_points, surface_label) = if ground_points.len() >= 3 {
+            (ground_points, "class-2 ground")
+        } else {
+            self.command_line.push_info(
+                "POINTCLOUDDRAPE: fewer than three class-2 points; using every resident point. Run POINTCLOUDGROUND for a bare-earth result.",
+            );
+            (all_points, "all resident points")
+        };
+        let Some(tin) = ocs_pointcloud::Tin::from_points(&surface_points, None) else {
+            self.command_line
+                .push_error("POINTCLOUDDRAPE: not enough points to build a terrain surface.");
+            return;
+        };
+        let triangle_count = tin.triangle_count();
+
+        let mut outputs = Vec::with_capacity(source_paths.len());
+        let mut output_points = 0_usize;
+        for (path_index, source) in source_paths.iter().enumerate() {
+            let draped = match ocs_pointcloud::drape_path(
+                &source.points,
+                source.closed,
+                spacing,
+                vertical_offset,
+                &tin,
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    self.command_line.push_error(
+                        format!(
+                            "POINTCLOUDDRAPE: path {} was not created: {error}. No draped entities were added.",
+                            path_index + 1
+                        )
+                        .as_str(),
+                    );
+                    return;
+                }
+            };
+            output_points = output_points.saturating_add(draped.points.len());
+            let mut polyline = acadrust::entities::Polyline3D::from_points(
+                draped
+                    .points
+                    .into_iter()
+                    .map(|point| acadrust::types::Vector3::new(point[0], point[1], point[2]))
+                    .collect(),
+            );
+            if draped.closed {
+                polyline.close();
+            }
+            outputs.push(acadrust::EntityType::Polyline3D(polyline));
+        }
+
+        let delta_safe = outputs
+            .iter()
+            .all(|entity| self.delta_add_safe(tab_index, entity));
+        let pending = self.begin_undo(tab_index, "POINTCLOUDDRAPE", outputs.len(), delta_safe);
+        let mut created_handles = rustc_hash::FxHashSet::default();
+        for output in outputs {
+            if let Some(handle) = self.commit_entity_handle(output) {
+                created_handles.insert(handle);
+            }
+        }
+        if created_handles.is_empty() {
+            // Close the recording even though no entity made it into the
+            // document. `commit_undo_delta` will discard the empty transaction.
+            if let Some(pending) = pending {
+                self.commit_undo_delta(tab_index, pending);
+            }
+            self.command_line
+                .push_error("POINTCLOUDDRAPE: the draped paths could not be added.");
+            return;
+        }
+        self.tabs[tab_index].dirty = true;
+        self.tabs[tab_index]
+            .scene
+            .replace_selection(created_handles.clone());
+        if let Some(pending) = pending {
+            self.commit_undo_delta(tab_index, pending);
+        }
+        let skipped_note = if skipped == 0 {
+            String::new()
+        } else {
+            format!("; skipped {skipped} unsupported selected object(s)")
+        };
+        self.command_line.push_output(
+            format!(
+                "POINTCLOUDDRAPE: created {} 3D polyline(s) with {output_points} points from a {triangle_count}-triangle TIN over {surface_label}; spacing {spacing}, vertical offset {vertical_offset}{skipped_note}.",
+                created_handles.len()
+            )
+            .as_str(),
+        );
+    }
+
     pub(super) fn patch_point_cloud_selection(
         &mut self,
         tab_index: usize,
@@ -6561,6 +6769,33 @@ pub(super) fn parse_source_indices(spec: &str, point_count: u64) -> Result<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_is_a_supported_open_drape_source() {
+        let entity = acadrust::EntityType::Line(acadrust::entities::Line::from_coords(
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0,
+        ));
+        let path = entity_drape_source(&entity).expect("line path");
+        assert!(!path.closed);
+        assert_eq!(vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], path.points);
+    }
+
+    #[test]
+    fn closed_bulged_polyline_drape_source_has_no_duplicate_endpoint() {
+        use acadrust::entities::lwpolyline::LwVertex;
+        use acadrust::types::Vector2;
+
+        let mut polyline = acadrust::entities::LwPolyline::new();
+        polyline.add_vertex(LwVertex::with_bulge(Vector2::new(0.0, 0.0), 1.0));
+        polyline.add_vertex(LwVertex::new(Vector2::new(2.0, 0.0)));
+        polyline.add_vertex(LwVertex::new(Vector2::new(2.0, 2.0)));
+        polyline.close();
+        let path = entity_drape_source(&acadrust::EntityType::LwPolyline(polyline))
+            .expect("polyline path");
+        assert!(path.closed);
+        assert!(path.points.len() > 3, "the bulged edge must be tessellated");
+        assert_ne!(path.points.first(), path.points.last());
+    }
 
     #[test]
     fn parses_individual_indices_and_inclusive_ranges() {

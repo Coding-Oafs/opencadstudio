@@ -144,6 +144,12 @@ impl Tin {
     }
 }
 
+impl crate::measurement::SurfaceSampler for Tin {
+    fn elevation_at(&self, x: f64, y: f64) -> Option<f64> {
+        self.z_at(x, y)
+    }
+}
+
 /// One contour line: a chained polyline at a constant elevation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Contour {

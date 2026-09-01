@@ -13,7 +13,7 @@
     * Per-machine install under Program Files\Open CAD Studio.
     * Start Menu shortcut under Programs\Open CAD Studio.
     * Desktop shortcut.
-    * File associations for .dwg and .dxf via a single ProgID; both
+    * File associations for .dwg, .dxf and .3mf; all
       route through `OpenCADStudio.exe "%1"` so the OS hands the file
       path to the app as argv[1] (consumed in OpenCADStudio::boot).
     * Default Programs registration (Capabilities + RegisteredApplications)
@@ -56,7 +56,7 @@
     <Property Id='ARPURLINFOABOUT' Value='https://github.com/Coding-Oafs/opencadstudio' />
     <Property Id='ARPURLUPDATEINFO' Value='https://github.com/Coding-Oafs/opencadstudio/releases' />
     <Property Id='ARPCONTACT' Value='Open CAD Studio' />
-    <Property Id='ARPCOMMENTS' Value='2D/3D CAD application for DWG and DXF drawings.' />
+    <Property Id='ARPCOMMENTS' Value='2D/3D CAD application for DWG, DXF, and 3MF models.' />
     <!--
       Hide "Repair" from the Apps & Features entry — there is no repair flow.
       "Modify" is deliberately left enabled: WixUI_FeatureTree supports it, so
@@ -142,6 +142,16 @@
                 <Verb Id='open' Command='Open' TargetFile='OpenCADStudioEXE' Argument='"%1"' />
               </Extension>
             </ProgId>
+
+            <ProgId
+              Id='OpenCADStudio.3MF'
+              Description='3MF 3D Model'
+              Icon='OpenCADStudioEXE'
+              IconIndex='0'>
+              <Extension Id='3mf' ContentType='model/3mf'>
+                <Verb Id='open' Command='Open' TargetFile='OpenCADStudioEXE' Argument='"%1"' />
+              </Extension>
+            </ProgId>
           </Component>
 
           <Directory Id='ProjDataDir' Name='proj-data'>
@@ -202,6 +212,12 @@
               Value='' />
             <RegistryValue
               Root='HKLM'
+              Key='SOFTWARE\Classes\Applications\OpenCADStudio.exe\SupportedTypes'
+              Name='.3mf'
+              Type='string'
+              Value='' />
+            <RegistryValue
+              Root='HKLM'
               Key='Software\Open CAD Studio\Capabilities'
               Name='ApplicationName'
               Type='string'
@@ -211,7 +227,7 @@
               Key='Software\Open CAD Studio\Capabilities'
               Name='ApplicationDescription'
               Type='string'
-              Value='2D/3D CAD application for DWG and DXF drawings.' />
+              Value='2D/3D CAD application for DWG, DXF, and 3MF models.' />
             <RegistryValue
               Root='HKLM'
               Key='Software\Open CAD Studio\Capabilities\FileAssociations'
@@ -224,6 +240,12 @@
               Name='.dxf'
               Type='string'
               Value='OpenCADStudio.DXF' />
+            <RegistryValue
+              Root='HKLM'
+              Key='Software\Open CAD Studio\Capabilities\FileAssociations'
+              Name='.3mf'
+              Type='string'
+              Value='OpenCADStudio.3MF' />
             <RegistryValue
               Root='HKLM'
               Key='Software\RegisteredApplications'

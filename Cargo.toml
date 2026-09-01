@@ -1,6 +1,6 @@
 [package]
 name = "OpenCADStudio"
-version = "2.0.1"
+version = "2.1.0"
 edition = "2021"
 build = "build.rs"
 
@@ -46,6 +46,8 @@ cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "895f
 acadifc = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "47b5603", optional = true }
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
+quick-xml = "0.41"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
 # Rasterises assets/logo.svg into the window icon at startup, so the taskbar
 # icon comes from the same file every other build target does. Already in the

@@ -86,6 +86,7 @@ DWG/DXF.
 | `POINTCLOUDNOISE <radius> <min-neighbors> [class]` | Flag isolated points with fewer than `min-neighbors` neighbours inside `radius` (voxel-hash k-NN) as noise (default class 7). Scale `radius` to the working set's own spacing: a strided 1-in-N sample is N times sparser than the source, so either raise the radius to match (≈3× the average point spacing) or build the LOD index first so the classifiers run over dense tiles. |
 | `POINTCLOUDRULE <field> <op> <a> [b] <class>` | Rule classification over any attribute (`ELEVATION`, `INTENSITY`, `RETURN`, `SOURCE`) with `LT`, `GT`, `BETWEEN`, or `EQ`. |
 | `POINTCLOUDCONTOUR [interval]` | Build a Delaunay TIN over the class-2 ground points (or every point when no ground exists yet) and write chained contour polylines at `interval` onto the `LIDAR-CONTOURS` layer as CAD entities. |
+| `POINTCLOUDDRAPE [spacing] [vertical-offset]` | Copy selected lines and 2D/3D polylines to terrain-following 3D polylines. Segments are densified to `spacing` (default 1 drawing unit), sampled from class-2 ground when available, and raised by the optional offset. The command is atomic when any sample falls outside the resident TIN. |
 | `POINTCLOUDFLAGSELECTION <flag> <ON/OFF>` | Change `WITHHELD`, `OVERLAP`, `KEY`, or `SYNTHETIC` on the active selection. |
 | `POINTCLOUDELEVATIONSELECTION <z>` | Set an elevation patch on the active selection. |
 | `POINTCLOUDUNDO` | Undo the most recent sparse point edit transaction. This is separate from CAD entity undo. |

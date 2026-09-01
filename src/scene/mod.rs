@@ -581,6 +581,10 @@ pub struct DerivedCaches {
     /// XREF resolution results produced by the loader worker. Keeping these in
     /// the open bundle prevents parsing and merging references on the UI thread.
     pub xrefs: Vec<crate::io::xref::XrefInfo>,
+    /// 3MF Core import diagnostics produced by the loader worker (one line per
+    /// fact); printed to the command line when the open completes. Empty for
+    /// every non-3MF source.
+    pub three_mf_report: Vec<String>,
     /// Model wire set and its spatial interaction index, prepared on the loader
     /// thread. Installing these prevents the first visible frame from paying a
     /// whole-drawing tessellation/index build while the progress overlay freezes.
@@ -866,6 +870,7 @@ fn build_derived_caches_impl(
         corrupt_dropped: 0,
         xref_dropped: 0,
         xrefs: Vec::new(),
+        three_mf_report: Vec::new(),
         prepared_geometry: None,
         timings: OpenTimings::default(),
     }
