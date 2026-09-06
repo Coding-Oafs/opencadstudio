@@ -1503,6 +1503,12 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::TerrainLoaded(loaded) => {
+                self.install_terrain(loaded);
+                Task::none()
+            }
+
             Message::BasemapProgressTick => Task::none(),
 
             #[cfg(not(target_arch = "wasm32"))]

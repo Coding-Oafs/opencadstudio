@@ -31,6 +31,8 @@ pub(crate) mod settings;
 mod shortcuts;
 mod spatial;
 mod style_ops;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod terrain;
 mod text_inline;
 mod update;
 mod view;
@@ -350,6 +352,13 @@ pub(super) struct OpenCADStudio {
     /// Active cancellable tile job. Atomics drive a lightweight status-bar
     /// progress readout without sending one UI message per tile.
     basemap_job: Option<crate::app::basemap::BasemapJob>,
+    /// `TERRAIN` fetch job, if one is running (see `crate::app::terrain`).
+    #[cfg(not(target_arch = "wasm32"))]
+    terrain_job: Option<crate::app::terrain::TerrainJob>,
+    /// Request settings for the next `TERRAIN` fetch (area, resolution,
+    /// mesh budget). Session-only by design: a terrain model is site data.
+    #[cfg(not(target_arch = "wasm32"))]
+    terrain_request: crate::app::terrain::TerrainRequest,
     /// The running Rhai macro, if any: its request inbox and outcome.
     #[cfg(not(target_arch = "wasm32"))]
     script_runner: Option<scripting::ScriptRunner>,
@@ -3207,6 +3216,9 @@ pub enum Message {
     ),
     /// A background basemap tile fetch finished.
     BasemapLoaded(crate::app::basemap::BasemapLoaded),
+    /// A background TERRAIN elevation fetch finished (native builds only).
+    #[cfg(not(target_arch = "wasm32"))]
+    TerrainLoaded(crate::app::terrain::TerrainLoaded),
     /// Periodic redraw while a basemap job updates its atomic progress.
     BasemapProgressTick,
     #[cfg(not(target_arch = "wasm32"))]
@@ -3334,6 +3346,10 @@ impl OpenCADStudio {
             point_cloud_load_queue: Vec::new(),
             basemap: crate::scene::basemap::BasemapSettings::default(),
             basemap_job: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            terrain_job: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            terrain_request: crate::app::terrain::TerrainRequest::default(),
             #[cfg(not(target_arch = "wasm32"))]
             script_runner: None,
             props_asym_scale: std::collections::HashSet::new(),

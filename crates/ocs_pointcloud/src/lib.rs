@@ -38,7 +38,8 @@ pub use crs::{
     assess_survey_readiness, crs_equivalent, crs_horizontal_unit, epsg_area_of_use,
     epsg_horizontal_unit, inspect_crs, reproject_between_crs, reproject_bounds_between_crs,
     reproject_from_crs, reproject_from_proj4, reproject_points_between_crs, reproject_to_crs,
-    reproject_with_patches_progress, reproject_xy, CrsInfo, ReprojectionStats, SurveyReadiness,
+    reproject_with_patches_progress, reproject_xy, reproject_xy_batch_between_crs, CrsInfo,
+    ReprojectionStats, SurveyReadiness,
 };
 pub use display::{
     classification_statistics, upcp_class_table, ClassDefinition, ClassStatistics, ClassTable,

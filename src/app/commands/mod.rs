@@ -375,6 +375,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "BASEMAP",
         "CRS",
         "SPATIALINFO",
+        // Global elevation (AWS Terrain Tiles) fetch, mesh and draping.
+        "TERRAIN",
         "WORKINGUNITS",
         "WUNITS",
         "NAVIGATOR",

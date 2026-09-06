@@ -235,6 +235,11 @@ pub(super) struct DocumentTab {
     /// edits are applied only during explicit export.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) point_cloud: super::point_cloud::PointCloudDataset,
+    /// Session-fetched global elevation model (AWS Terrain Tiles) for
+    /// draping, elevation queries and mesh generation. See
+    /// `crate::app::terrain`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) terrain: Option<super::terrain::TerrainDataset>,
     /// Open local-first spatial project manifest and its path. Large sources
     /// remain external; this owns only catalog, named-object, job and
     /// provenance metadata.
@@ -527,6 +532,8 @@ impl DocumentTab {
             spatial: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             point_cloud: crate::app::point_cloud::PointCloudDataset::for_this_machine(),
+            #[cfg(not(target_arch = "wasm32"))]
+            terrain: None,
             #[cfg(not(target_arch = "wasm32"))]
             spatial_project: None,
             #[cfg(not(target_arch = "wasm32"))]

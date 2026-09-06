@@ -233,6 +233,44 @@ pub fn reproject_points_between_crs(
     Ok(())
 }
 
+/// Reproject a slice of XY coordinates between complete CRS descriptors while
+/// constructing each projection only once. This is the raster-grid path:
+/// resampling a fetched elevation mosaic transforms thousands to millions of
+/// grid nodes that must share one transform instead of rebuilding a `Proj` per
+/// coordinate. Each entry arrives `Some`; entries that cannot transform come
+/// back `None`. Z is not part of the operation.
+pub fn reproject_xy_batch_between_crs(
+    source: &CrsInfo,
+    target: &CrsInfo,
+    points: &mut [Option<[f64; 2]>],
+) {
+    if crs_equivalent(source, target) {
+        return;
+    }
+    let Some(source_projection) = projection_from_crs(source) else {
+        points.iter_mut().for_each(|point| *point = None);
+        return;
+    };
+    let Some(target_projection) = projection_from_crs(target) else {
+        points.iter_mut().for_each(|point| *point = None);
+        return;
+    };
+    for point in points.iter_mut() {
+        let Some(xy) = *point else {
+            continue;
+        };
+        match transform_coordinate(&source_projection, &target_projection, (xy[0], xy[1], 0.0)) {
+            Ok(coordinate) if coordinate.0.is_finite() && coordinate.1.is_finite() => {
+                *point = Some([coordinate.0, coordinate.1]);
+            }
+            // The caller maps a failed coordinate to the raster no-data value;
+            // leaving the stale source coordinate in place would silently
+            // place terrain at the wrong location.
+            _ => *point = None,
+        }
+    }
+}
+
 /// Reproject an XYZ envelope between complete CRS descriptors. Horizontal
 /// edges are densified to capture curvature; Z is preserved.
 pub fn reproject_bounds_between_crs(
@@ -1022,6 +1060,40 @@ fn apply_patch_for_reprojection(point: &mut las::Point, patch: PointPatch) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_reprojection_round_trips_and_reports_failures() {
+        let merc = CrsInfo {
+            horizontal_epsg: Some(3857),
+            ..Default::default()
+        };
+        let geo = CrsInfo {
+            horizontal_epsg: Some(4326),
+            ..Default::default()
+        };
+        let site = [-11_752_788.36, 5_621_521.61];
+        let mut points = vec![Some([0.0, 0.0]), Some(site), None];
+        reproject_xy_batch_between_crs(&merc, &geo, &mut points);
+        // The mercator origin is the equator/prime meridian.
+        assert_eq!(points[0], Some([0.0, 0.0]));
+        let Some(geographic) = points[1] else {
+            panic!("site coordinate transforms");
+        };
+        assert!(geographic[0].abs() <= 180.0 && geographic[1].abs() <= 90.0);
+        // An entry that arrived None stays None.
+        assert!(points[2].is_none());
+        // Round-tripping 4326 -> 3857 recovers the source coordinates.
+        reproject_xy_batch_between_crs(&geo, &merc, &mut points[..2]);
+        assert_eq!(points[0], Some([0.0, 0.0]));
+        let round_trip = points[1].expect("round trip");
+        assert!((round_trip[0] - site[0]).abs() < 1.0, "x = {}", round_trip[0]);
+        assert!((round_trip[1] - site[1]).abs() < 1.0, "y = {}", round_trip[1]);
+        // An unresolved source CRS fails every coordinate instead of leaving
+        // stale source values behind.
+        let mut one = vec![Some([1.0, 2.0])];
+        reproject_xy_batch_between_crs(&CrsInfo::default(), &merc, &mut one);
+        assert!(one[0].is_none());
+    }
 
     #[test]
     fn extracts_first_wkt_name() {

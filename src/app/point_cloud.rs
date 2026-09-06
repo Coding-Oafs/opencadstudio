@@ -30,15 +30,15 @@ use std::{
 };
 
 #[derive(Clone, Debug, PartialEq)]
-struct DrapeSourcePath {
-    points: Vec<[f64; 3]>,
-    closed: bool,
+pub(super) struct DrapeSourcePath {
+    pub(super) points: Vec<[f64; 3]>,
+    pub(super) closed: bool,
 }
 
 /// Converts supported CAD curve entities to a world-space path. Planar curve
 /// entities go through the existing kernel tessellator so bulged polyline
 /// segments are not silently replaced with chords before terrain sampling.
-fn entity_drape_source(entity: &acadrust::EntityType) -> Option<DrapeSourcePath> {
+pub(super) fn entity_drape_source(entity: &acadrust::EntityType) -> Option<DrapeSourcePath> {
     use acadrust::EntityType;
 
     let (mut points, closed) = match entity {
@@ -4845,8 +4845,19 @@ impl OpenCADStudio {
             return;
         }
         if self.tabs[tab_index].point_cloud.is_empty() {
+            // No cloud attached: drape onto the fetched global terrain
+            // model when one is resident (TERRAIN AREA), so the same
+            // command keeps working in site drawings without LiDAR.
+            if self.tabs[tab_index].terrain.is_some() {
+                return self.drape_selected_to_terrain(
+                    tab_index,
+                    spacing,
+                    vertical_offset,
+                    outside_policy,
+                );
+            }
             self.command_line
-                .push_error("POINTCLOUDDRAPE: attach a LAS/LAZ cloud first.");
+                .push_error("POINTCLOUDDRAPE: attach a LAS/LAZ cloud first (or fetch global terrain with TERRAIN AREA).");
             return;
         }
 
