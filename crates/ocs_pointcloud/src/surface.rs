@@ -1,8 +1,8 @@
 //! Raster surface products and breakline quality checks.
 
 use crate::{
-    visit_full_density, FullDensityProgress, PointFilter, ProcessingExtent, ProtectedOutput,
-    Result, SamplePoint, SurfaceSampler,
+    FullDensityProgress, PointFilter, ProcessingExtent, ProtectedOutput, Result, SamplePoint,
+    SurfaceSampler, visit_full_density,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -578,12 +578,16 @@ mod tests {
             closed: false,
         };
         let issues = validate_breaklines(&[line], Some(1.0));
-        assert!(issues
-            .iter()
-            .any(|item| item.kind == BreaklineIssueKind::SelfIntersection));
-        assert!(issues
-            .iter()
-            .any(|item| item.kind == BreaklineIssueKind::ElevationSpike));
+        assert!(
+            issues
+                .iter()
+                .any(|item| item.kind == BreaklineIssueKind::SelfIntersection)
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|item| item.kind == BreaklineIssueKind::ElevationSpike)
+        );
     }
 
     #[test]
@@ -601,8 +605,10 @@ mod tests {
             },
         ];
         let issues = validate_breaklines(&lines, None);
-        assert!(issues
-            .iter()
-            .any(|item| item.kind == BreaklineIssueKind::CrossingBreakline));
+        assert!(
+            issues
+                .iter()
+                .any(|item| item.kind == BreaklineIssueKind::CrossingBreakline)
+        );
     }
 }

@@ -684,7 +684,7 @@ impl OpenCADStudio {
 
             cmd if cmd.starts_with("REFEDIT_BEGIN:") => {
                 use crate::modules::draw::modify::refedit::{
-                    apply_insert_transform, RefEditSession,
+                    RefEditSession, apply_insert_transform,
                 };
                 use acadrust::Handle;
 
@@ -1164,8 +1164,8 @@ impl OpenCADStudio {
                 || cmd.starts_with("MESHDELETEFACE ") =>
             {
                 use crate::entities::mesh_topology::{
-                    delete_faces, fill_small_holes, orient_consistently, weld_vertices,
-                    MeshTopology,
+                    MeshTopology, delete_faces, fill_small_holes, orient_consistently,
+                    weld_vertices,
                 };
 
                 // Topology passes build adjacency hashes sized to the face
@@ -2439,8 +2439,8 @@ impl ArithParser {
 #[cfg(test)]
 mod flatten_tests {
     use super::flatten_entity_z;
-    use acadrust::types::Vector3;
     use acadrust::EntityType;
+    use acadrust::types::Vector3;
 
     #[test]
     fn flattens_3d_polyline_vertices() {
@@ -2462,10 +2462,11 @@ mod flatten_tests {
         assert_eq!(pl.elevation, 0.0);
         assert!(pl.vertices.iter().all(|v| v.position.z == 0.0));
         // X/Y must survive the projection.
-        assert!(pl
-            .vertices
-            .iter()
-            .all(|v| v.position.x == 1.0 && v.position.y == 2.0));
+        assert!(
+            pl.vertices
+                .iter()
+                .all(|v| v.position.x == 1.0 && v.position.y == 2.0)
+        );
     }
 
     #[test]

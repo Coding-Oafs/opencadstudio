@@ -351,10 +351,13 @@ jobs:
           # suffix (v2.0.0-alpha.1 -> 2.0.0) so the marker survives in the tag
           # and asset names while the installer metadata stays valid.
           $version = $version -replace '-.*$', ''
-          # workflow_dispatch runs use the branch name as ref_name, which
-          # is not a valid MSI ProductVersion — fall back to 0.0.0 so test
-          # builds still produce an installer.
-          if ($version -notmatch '^\d+(\.\d+){0,3}$') { $version = "0.0.0" }
+          # Manual builds run against a branch; use its actual package
+          # version so the MSI can upgrade the installed application.
+          $manifestVersion = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"\r\n]+)"').Groups[1].Value -replace '-.*$', ''
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') { $version = $manifestVersion }
+          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $version -ne $manifestVersion) {
+            throw "MSI version '$version' must match Cargo.toml '$manifestVersion'."
+          }
           # WiX Toolset 3.x is pre-installed on windows-latest; $env:WIX
           # points to the install root. candle compiles .wxs → .wixobj
           # and light links it into the final .msi.

@@ -21,3 +21,4 @@ ocs_platform = { path = "../ocs_platform" }
 
 # Delaunay triangulation for the ground TIN and contour generation.
 delaunator = "1.1"
+spade = "2.15"

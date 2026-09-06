@@ -9,7 +9,7 @@
 use acadrust::entities::mesh::{Mesh, MeshFace};
 use acadrust::tables::Layer;
 use acadrust::types::{Color, Vector3};
-use acadrust::{CadDocument, EntityType};
+use acadrust::{CadDocument, EntityType, Handle};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet};
@@ -952,6 +952,9 @@ pub struct ExportStats {
     pub vertices: usize,
     pub triangles: usize,
     pub materials: usize,
+    /// Entities carrying 3D geometry the format's exporter does not write
+    /// (polygon meshes, polyface meshes, solids, block references).
+    pub skipped: usize,
 }
 
 fn zip_error(error: impl std::fmt::Display) -> String {
@@ -974,8 +977,10 @@ fn unit_name(code: i16) -> &'static str {
 /// Serialize the document's MESH entities as a conforming 3MF Core package.
 /// Exact source geometry, header units, entity colors (base materials), and
 /// layer names (object names) are preserved; polygon faces with more than
-/// three vertices are fan-triangulated.
+/// three vertices are ear-clipped in their own plane so a concave outline
+/// stays inside itself.
 pub fn export_path(document: &CadDocument, path: &Path) -> Result<ExportStats, String> {
+    let (export_document, additionally_skipped) = flatten_export_geometry(document)?;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let stem = path
         .file_name()
@@ -991,9 +996,12 @@ pub fn export_path(document: &CadDocument, path: &Path) -> Result<ExportStats, S
         .create_new(true)
         .open(&partial)
         .map_err(|error| format!("failed to create temporary 3MF: {error}"))?;
-    let result = write_package(document, file);
+    let result = write_package(&export_document, file);
     let stats = match result {
-        Ok(stats) => stats,
+        Ok(mut stats) => {
+            stats.skipped += additionally_skipped;
+            stats
+        }
         Err(error) => {
             let _ = std::fs::remove_file(&partial);
             return Err(error);
@@ -1020,6 +1028,196 @@ pub fn export_path(document: &CadDocument, path: &Path) -> Result<ExportStats, S
         let _ = std::fs::remove_file(&backup);
     }
     Ok(stats)
+}
+
+/// Materialize all model-space 3D geometry for the Core writer. INSERTs are
+/// recursively expanded with their full affine/MINSERT transforms, while ACIS
+/// solids and legacy mesh families are tessellated at display LOD 0. This is
+/// intentionally done on the export worker's owned document snapshot.
+fn flatten_export_geometry(document: &CadDocument) -> Result<(CadDocument, usize), String> {
+    use acadrust::types::Transform as CadTransform;
+
+    let mut out = CadDocument::new();
+    out.header.insertion_units = document.header.insertion_units;
+    let model_block = document.objects.values().find_map(|object| match object {
+        acadrust::objects::ObjectType::Layout(layout)
+            if layout.name.eq_ignore_ascii_case("Model") =>
+        {
+            Some(layout.block_record)
+        }
+        _ => None,
+    });
+    let block_owned: HashSet<Handle> = document
+        .block_records
+        .iter()
+        .flat_map(|record| record.entity_handles.iter().copied())
+        .collect();
+    let top_level: Vec<_> = document
+        .entities()
+        .filter(|entity| {
+            let owner = entity.common().owner_handle;
+            model_block.is_some_and(|model| owner == model)
+                || (owner.is_null() && !block_owned.contains(&entity.common().handle))
+        })
+        .cloned()
+        .collect();
+    let mut skipped = 0usize;
+    let mut active_blocks = HashSet::new();
+    for entity in &top_level {
+        flatten_entity(
+            document,
+            entity,
+            CadTransform::identity(),
+            &mut active_blocks,
+            &mut out,
+            &mut skipped,
+            0,
+        )?;
+    }
+    Ok((out, skipped))
+}
+
+fn flatten_entity(
+    document: &CadDocument,
+    entity: &EntityType,
+    transform: acadrust::types::Transform,
+    active_blocks: &mut HashSet<String>,
+    out: &mut CadDocument,
+    skipped: &mut usize,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > MAX_COMPONENT_DEPTH {
+        *skipped += 1;
+        return Ok(());
+    }
+    match entity {
+        EntityType::Insert(insert) => {
+            if !active_blocks.insert(insert.block_name.to_ascii_uppercase()) {
+                *skipped += 1;
+                return Ok(());
+            }
+            let Some(record) = document.block_records.get(&insert.block_name) else {
+                active_blocks.remove(&insert.block_name.to_ascii_uppercase());
+                *skipped += 1;
+                return Ok(());
+            };
+            let transforms = insert_transforms(insert);
+            let members: Vec<_> = if record.entity_handles.is_empty() {
+                document
+                    .entities()
+                    .filter(|member| member.common().owner_handle == record.handle)
+                    .cloned()
+                    .collect()
+            } else {
+                record
+                    .entity_handles
+                    .iter()
+                    .filter_map(|handle| document.get_entity(*handle).cloned())
+                    .collect()
+            };
+            for placement in transforms {
+                let combined = placement.then(&transform);
+                for member in &members {
+                    flatten_entity(
+                        document,
+                        member,
+                        combined,
+                        active_blocks,
+                        out,
+                        skipped,
+                        depth + 1,
+                    )?;
+                }
+            }
+            active_blocks.remove(&insert.block_name.to_ascii_uppercase());
+        }
+        EntityType::Mesh(source) => {
+            let mut mesh = source.clone();
+            mesh.common.handle = Handle::NULL;
+            for vertex in &mut mesh.vertices {
+                *vertex = transform.apply(*vertex);
+            }
+            if !mesh.faces.is_empty() {
+                out.add_entity(EntityType::Mesh(mesh))
+                    .map_err(|error| format!("failed staging 3MF mesh: {error}"))?;
+            }
+        }
+        EntityType::Solid3D(_)
+        | EntityType::Region(_)
+        | EntityType::Body(_)
+        | EntityType::Surface(_)
+        | EntityType::PolygonMesh(_)
+        | EntityType::PolyfaceMesh(_) => {
+            let facet_res = document.header.facet_resolution;
+            let deflection =
+                crate::entities::solid3d::display_deflection(&document.header, facet_res);
+            let isolines = document.header.isolines.max(0) as usize;
+            let color = crate::scene::convert::tess_util::aci_to_rgba(&entity.common().color);
+            let Some(set) = crate::entities::solid3d::tessellate_volume(
+                entity, color, facet_res, deflection, isolines,
+            ) else {
+                *skipped += 1;
+                return Ok(());
+            };
+            let Some(model) = set.lods.first() else {
+                *skipped += 1;
+                return Ok(());
+            };
+            let mut mesh = Mesh::new();
+            mesh.blend_crease = false;
+            mesh.common.layer = entity.common().layer.clone();
+            mesh.common.color = entity.common().color;
+            for (index, high) in model.verts.iter().enumerate() {
+                let low = model.verts_low.get(index).copied().unwrap_or([0.0; 3]);
+                let vertex = Vector3::new(
+                    high[0] as f64 + low[0] as f64,
+                    high[1] as f64 + low[1] as f64,
+                    high[2] as f64 + low[2] as f64,
+                );
+                mesh.vertices.push(transform.apply(vertex));
+            }
+            mesh.faces = model
+                .indices
+                .chunks_exact(3)
+                .map(|face| {
+                    MeshFace::triangle(face[0] as usize, face[1] as usize, face[2] as usize)
+                })
+                .collect();
+            if mesh.faces.is_empty() {
+                *skipped += 1;
+            } else {
+                out.add_entity(EntityType::Mesh(mesh))
+                    .map_err(|error| format!("failed staging tessellated 3MF solid: {error}"))?;
+            }
+        }
+        EntityType::Block(_) | EntityType::BlockEnd(_) | EntityType::AttributeDefinition(_) => {}
+        _ => {}
+    }
+    Ok(())
+}
+
+fn insert_transforms(insert: &acadrust::entities::Insert) -> Vec<acadrust::types::Transform> {
+    use acadrust::types::{Matrix3, Matrix4, Transform, Vector3};
+    if insert.column_count <= 1 && insert.row_count <= 1 {
+        return vec![insert.get_transform()];
+    }
+    let ocs = Matrix4::from_matrix3(Matrix3::arbitrary_axis(insert.normal));
+    let rotation = Matrix4::rotation_z(insert.rotation);
+    let scale = Matrix4::scaling(insert.x_scale(), insert.y_scale(), insert.z_scale());
+    let mut transforms =
+        Vec::with_capacity(usize::from(insert.column_count) * usize::from(insert.row_count));
+    for row in 0..insert.row_count {
+        for column in 0..insert.column_count {
+            let point = Vector3::new(
+                insert.insert_point.x + column as f64 * insert.column_spacing,
+                insert.insert_point.y + row as f64 * insert.row_spacing,
+                insert.insert_point.z,
+            );
+            let translation = Matrix4::translation(point.x, point.y, point.z);
+            transforms.push(Transform::from_matrix(ocs * translation * rotation * scale));
+        }
+    }
+    transforms
 }
 
 fn write_package(document: &CadDocument, sink: File) -> Result<ExportStats, String> {
@@ -1074,6 +1272,21 @@ fn write_model<W: Write>(zip: &mut W, document: &CadDocument) -> Result<ExportSt
     if meshes.is_empty() {
         return Err("no MESH entities to export".to_string());
     }
+    // Geometry the format could carry but this exporter does not write is
+    // counted rather than passed over silently, so the report can say the
+    // export is not the whole drawing.
+    let skipped = document
+        .entities()
+        .filter(|entity| {
+            matches!(
+                entity,
+                EntityType::PolygonMesh(_)
+                    | EntityType::PolyfaceMesh(_)
+                    | EntityType::Solid3D(_)
+                    | EntityType::Insert(_)
+            )
+        })
+        .count();
     let mut total_triangles = 0usize;
     for mesh in &meshes {
         if mesh.vertices.len() > MAX_VERTICES {
@@ -1147,6 +1360,7 @@ fn write_model<W: Write>(zip: &mut W, document: &CadDocument) -> Result<ExportSt
     let mut stats = ExportStats {
         objects: meshes.len(),
         materials: colors.len(),
+        skipped,
         ..ExportStats::default()
     };
     for (position, mesh) in meshes.iter().enumerate() {
@@ -1189,11 +1403,11 @@ fn write_model<W: Write>(zip: &mut W, document: &CadDocument) -> Result<ExportSt
             if indices.len() < 3 {
                 continue;
             }
-            for fan in 1..indices.len() - 1 {
+            for [v1, v2, v3] in face_triangles(mesh, indices) {
                 let mut triangle = BytesStart::new("triangle");
-                triangle.push_attribute(("v1", indices[0].to_string().as_str()));
-                triangle.push_attribute(("v2", indices[fan].to_string().as_str()));
-                triangle.push_attribute(("v3", indices[fan + 1].to_string().as_str()));
+                triangle.push_attribute(("v1", v1.to_string().as_str()));
+                triangle.push_attribute(("v2", v2.to_string().as_str()));
+                triangle.push_attribute(("v3", v3.to_string().as_str()));
                 xml(writer.write_event(Event::Empty(triangle)))?;
                 stats.triangles += 1;
             }
@@ -1218,6 +1432,50 @@ fn write_model<W: Write>(zip: &mut W, document: &CadDocument) -> Result<ExportSt
         .flush()
         .map_err(|error| format!("3MF model flush failed: {error}"))?;
     Ok(stats)
+}
+
+/// One polygonal face as index triples, ear-clipped in the face's own plane.
+///
+/// The clipper hands back corner positions rather than indices, so each goes
+/// home to the corner it came from by its exact coordinates — they were
+/// copied by value. One it cannot place leaves the fan the old exporter
+/// wrote, which is the shape a convex face has anyway.
+fn face_triangles(mesh: &Mesh, indices: &[usize]) -> Vec<[usize; 3]> {
+    use crate::entities::mesh::triangulate_planar;
+
+    if indices.len() == 3 {
+        return vec![[indices[0], indices[1], indices[2]]];
+    }
+    let corners: Vec<[f64; 3]> = indices
+        .iter()
+        .map(|&index| {
+            let vertex = mesh.vertices[index];
+            [vertex.x, vertex.y, vertex.z]
+        })
+        .collect();
+    let key = |point: [f64; 3]| [point[0].to_bits(), point[1].to_bits(), point[2].to_bits()];
+    let mut corner_at: HashMap<[u64; 3], usize> = HashMap::with_capacity(corners.len());
+    for (slot, point) in corners.iter().enumerate() {
+        corner_at.entry(key(*point)).or_insert(indices[slot]);
+    }
+    let mut out = Vec::with_capacity(indices.len() - 2);
+    for triangle in triangulate_planar(&corners).chunks(3) {
+        if triangle.len() < 3 {
+            break;
+        }
+        let home = |point: [f64; 3]| corner_at.get(&key(point)).copied();
+        match [home(triangle[0]), home(triangle[1]), home(triangle[2])] {
+            [Some(a), Some(b), Some(c)] => out.push([a, b, c]),
+            _ => {
+                out.clear();
+                for at in 1..indices.len() - 1 {
+                    out.push([indices[0], indices[at], indices[at + 1]]);
+                }
+                return out;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1418,6 +1676,96 @@ mod tests {
         assert_eq!(vec![2, 4], triangles_per_entity);
         assert!(colors.contains(&Color::Rgb { r: 255, g: 0, b: 0 }));
         assert!(colors.contains(&Color::Rgb { r: 0, g: 0, b: 255 }));
+    }
+
+    #[test]
+    fn export_flattens_block_insert_geometry_with_placement() {
+        use acadrust::entities::Insert;
+        use acadrust::tables::BlockRecord;
+
+        let mut document = CadDocument::new();
+        let block_handle = Handle::new(document.next_handle());
+        let mut block = BlockRecord::new("Part");
+        block.handle = block_handle;
+        document.block_records.add(block).unwrap();
+
+        let mut source = Mesh::new();
+        source.vertices = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+        ];
+        source.faces.push(MeshFace::triangle(0, 1, 2));
+        source.common.owner_handle = block_handle;
+        document.add_entity(EntityType::Mesh(source)).unwrap();
+        document
+            .add_entity(EntityType::Insert(Insert::new(
+                "Part",
+                Vector3::new(10.0, 20.0, 30.0),
+            )))
+            .unwrap();
+
+        let (flattened, skipped) = flatten_export_geometry(&document).unwrap();
+        assert_eq!(0, skipped);
+        let EntityType::Mesh(mesh) = flattened.entities().next().unwrap() else {
+            panic!("expected flattened mesh")
+        };
+        assert_eq!(Vector3::new(10.0, 20.0, 30.0), mesh.vertices[0]);
+        assert_eq!(Vector3::new(11.0, 20.0, 30.0), mesh.vertices[1]);
+        assert_eq!(1, mesh.faces.len());
+    }
+
+    #[test]
+    fn a_concave_face_exports_without_crossing_its_own_outline() {
+        // A U-shaped face: a fan from the first corner reaches across the
+        // notch, which is the triangle set this test refuses. The notch point
+        // lies strictly off the outline, so no ear-clipped triangle covers it.
+        let mut document = CadDocument::new();
+        let mut mesh = Mesh::new();
+        mesh.vertices = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(6.0, 0.0, 0.0),
+            Vector3::new(6.0, 6.0, 0.0),
+            Vector3::new(4.0, 6.0, 0.0),
+            Vector3::new(4.0, 2.0, 0.0),
+            Vector3::new(2.0, 2.0, 0.0),
+            Vector3::new(2.0, 6.0, 0.0),
+            Vector3::new(0.0, 6.0, 0.0),
+        ];
+        mesh.faces.push(MeshFace::new((0..8).collect()));
+        document.add_entity(EntityType::Mesh(mesh)).unwrap();
+
+        let path = std::env::temp_dir().join(format!("ocs-3mf-concave-{}.3mf", std::process::id()));
+        let stats = export_path(&document, &path).unwrap();
+        assert_eq!(6, stats.triangles, "an 8-gon clips into 6 ears");
+
+        let imported = import_path(&path, None).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let notch = [3.0, 4.0];
+        let flat = |vertex: Vector3| [vertex.x, vertex.y];
+        let area2 = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+            (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        };
+        for entity in imported.document.entities() {
+            let EntityType::Mesh(mesh) = entity else {
+                continue;
+            };
+            for face in &mesh.faces {
+                if face.vertices.len() != 3 {
+                    continue;
+                }
+                let a = flat(mesh.vertices[face.vertices[0]]);
+                let b = flat(mesh.vertices[face.vertices[1]]);
+                let c = flat(mesh.vertices[face.vertices[2]]);
+                let covered = [area2(a, b, notch), area2(b, c, notch), area2(c, a, notch)];
+                let spilling = covered.iter().all(|edge| *edge > 0.0)
+                    || covered.iter().all(|edge| *edge < 0.0);
+                assert!(
+                    !spilling,
+                    "triangle {a:?} {b:?} {c:?} reaches across the notch"
+                );
+            }
+        }
     }
 
     #[test]

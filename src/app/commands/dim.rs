@@ -1152,7 +1152,7 @@ impl OpenCADStudio {
             }
 
             "OFFSET" => {
-                use crate::modules::draw::modify::offset::{is_offsettable, OffsetCommand};
+                use crate::modules::draw::modify::offset::{OffsetCommand, is_offsettable};
                 let all_entities: Vec<_> = self.tabs[i]
                     .scene
                     .entity_wires()

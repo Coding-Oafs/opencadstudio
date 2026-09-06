@@ -1,6 +1,10 @@
 // Small platform shims for things the desktop build does natively but the web
 // (wasm) build must handle differently or skip.
 
+pub mod resources;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod background;
+
 /// Open a URL in the user's browser.
 ///
 /// Wayland requires an xdg-activation token from the source window before it

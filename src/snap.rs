@@ -1339,30 +1339,47 @@ impl Snapper {
             if let Some(segments) = &local_segments {
                 // Exact cursor-local sweep: never discard a valid intersection
                 // in dense geometry. Min-X ordering plus Y overlap avoids
-                // comparing segment pairs whose bounds cannot meet.
+                // comparing segment pairs whose bounds cannot meet. The work
+                // budget is counted inline with the same pair enumeration the
+                // sweep itself performs (one count per X-overlapping pair), so
+                // the separate probing pass is gone. Candidates buffer until
+                // the sweep finishes within budget and only then feed the
+                // ranking — an over-budget abort discards them, leaving the
+                // pass empty exactly like the old probe-gated skip.
                 let mut local: Vec<&IndexedSegment> = segments.iter().collect();
                 local.sort_by(|a, b| a.min_x().total_cmp(&b.min_x()));
-                if indexed_sweep_within_budget(&local) {
-                    'intersection_sweep: for i in 0..local.len() {
-                        let a = local[i];
-                        for &b in local.iter().skip(i + 1) {
-                            if b.min_x() > a.max_x() {
-                                break;
-                            }
-                            if a.wire == b.wire || a.max_y() < b.min_y() || a.min_y() > b.max_y() {
-                                continue;
-                            }
-                            if let Some(pt) = seg_intersect_3d(a.a, a.b, b.a, b.b) {
-                                let exact_cursor = dist2(
-                                    world_to_screen(pt, view_rot, eye, bounds),
-                                    cursor_screen,
-                                ) <= f32::EPSILON;
-                                try_pt(pt, SnapType::Intersection);
-                                if exact_cursor {
-                                    break 'intersection_sweep;
-                                }
+                let mut work = 0usize;
+                let mut over_budget = false;
+                let mut hits: Vec<DVec3> = Vec::new();
+                'intersection_sweep: for i in 0..local.len() {
+                    let a = local[i];
+                    for &b in local.iter().skip(i + 1) {
+                        if b.min_x() > a.max_x() {
+                            break;
+                        }
+                        work += 1;
+                        if work > MAX_INDEXED_PAIRWISE_WORK {
+                            over_budget = true;
+                            break 'intersection_sweep;
+                        }
+                        if a.wire == b.wire || a.max_y() < b.min_y() || a.min_y() > b.max_y() {
+                            continue;
+                        }
+                        if let Some(pt) = seg_intersect_3d(a.a, a.b, b.a, b.b) {
+                            let exact_cursor = dist2(
+                                world_to_screen(pt, view_rot, eye, bounds),
+                                cursor_screen,
+                            ) <= f32::EPSILON;
+                            hits.push(pt);
+                            if exact_cursor {
+                                break 'intersection_sweep;
                             }
                         }
+                    }
+                }
+                if !over_budget {
+                    for pt in hits {
+                        try_pt(pt, SnapType::Intersection);
                     }
                 }
             } else {
@@ -1486,7 +1503,9 @@ impl Snapper {
             if let Some(segments) = &local_segments {
                 // Project once, then run an exact screen-AABB sweep. Unlike the
                 // previous 512-item cap this cannot drop the true apparent
-                // intersection in a dense aperture.
+                // intersection in a dense aperture. Work budget counted inline
+                // (see the Intersection sweep above): buffered candidates only
+                // feed the ranking when the sweep finishes within budget.
                 let mut projected: Vec<(&IndexedSegment, Point, Point, [f32; 4])> = segments
                     .iter()
                     .map(|seg| {
@@ -1501,37 +1520,45 @@ impl Snapper {
                     })
                     .collect();
                 projected.sort_by(|a, b| a.3[0].total_cmp(&b.3[0]));
-                if projected_sweep_within_budget(&projected) {
-                    'apparent_sweep: for i in 0..projected.len() {
-                        let (segment_a, screen_a0, screen_a1, aabb_a) = projected[i];
-                        for &(segment_b, screen_b0, screen_b1, aabb_b) in
-                            projected.iter().skip(i + 1)
+                let mut work = 0usize;
+                let mut over_budget = false;
+                let mut hits: Vec<DVec3> = Vec::new();
+                'apparent_sweep: for i in 0..projected.len() {
+                    let (segment_a, screen_a0, screen_a1, aabb_a) = projected[i];
+                    for &(segment_b, screen_b0, screen_b1, aabb_b) in
+                        projected.iter().skip(i + 1)
+                    {
+                        if aabb_b[0] > aabb_a[2] {
+                            break;
+                        }
+                        work += 1;
+                        if work > MAX_INDEXED_PAIRWISE_WORK {
+                            over_budget = true;
+                            break 'apparent_sweep;
+                        }
+                        if segment_a.wire == segment_b.wire
+                            || aabb_a[3] < aabb_b[1]
+                            || aabb_a[1] > aabb_b[3]
                         {
-                            if aabb_b[0] > aabb_a[2] {
-                                break;
-                            }
-                            if segment_a.wire == segment_b.wire
-                                || aabb_a[3] < aabb_b[1]
-                                || aabb_a[1] > aabb_b[3]
-                            {
-                                continue;
-                            }
-                            if let Some((ta, _)) =
-                                seg_intersect_2d(screen_a0, screen_a1, screen_b0, screen_b1)
-                            {
-                                let apparent_screen = Point::new(
-                                    screen_a0.x + ta * (screen_a1.x - screen_a0.x),
-                                    screen_a0.y + ta * (screen_a1.y - screen_a0.y),
-                                );
-                                try_pt(
-                                    segment_a.a + ta as f64 * (segment_a.b - segment_a.a),
-                                    SnapType::ApparentIntersection,
-                                );
-                                if dist2(apparent_screen, cursor_screen) <= f32::EPSILON {
-                                    break 'apparent_sweep;
-                                }
+                            continue;
+                        }
+                        if let Some((ta, _)) =
+                            seg_intersect_2d(screen_a0, screen_a1, screen_b0, screen_b1)
+                        {
+                            let apparent_screen = Point::new(
+                                screen_a0.x + ta * (screen_a1.x - screen_a0.x),
+                                screen_a0.y + ta * (screen_a1.y - screen_a0.y),
+                            );
+                            hits.push(segment_a.a + ta as f64 * (segment_a.b - segment_a.a));
+                            if dist2(apparent_screen, cursor_screen) <= f32::EPSILON {
+                                break 'apparent_sweep;
                             }
                         }
+                    }
+                }
+                if !over_budget {
+                    for pt in hits {
+                        try_pt(pt, SnapType::ApparentIntersection);
                     }
                 }
             } else {
@@ -2118,44 +2145,6 @@ impl IndexedSegment {
 }
 
 const MAX_INDEXED_PAIRWISE_WORK: usize = 500_000;
-
-fn indexed_sweep_within_budget(segments: &[&IndexedSegment]) -> bool {
-    let mut work = 0usize;
-    for (index, &a) in segments.iter().enumerate() {
-        for &b in segments.iter().skip(index + 1) {
-            if b.min_x() > a.max_x() {
-                break;
-            }
-            work += 1;
-            if work > MAX_INDEXED_PAIRWISE_WORK {
-                return false;
-            }
-            if a.wire == b.wire || a.max_y() < b.min_y() || a.min_y() > b.max_y() {
-                continue;
-            }
-        }
-    }
-    true
-}
-
-fn projected_sweep_within_budget(segments: &[(&IndexedSegment, Point, Point, [f32; 4])]) -> bool {
-    let mut work = 0usize;
-    for (index, &(a, _, _, aabb_a)) in segments.iter().enumerate() {
-        for &(b, _, _, aabb_b) in segments.iter().skip(index + 1) {
-            if aabb_b[0] > aabb_a[2] {
-                break;
-            }
-            work += 1;
-            if work > MAX_INDEXED_PAIRWISE_WORK {
-                return false;
-            }
-            if a.wire == b.wire || aabb_a[3] < aabb_b[1] || aabb_a[1] > aabb_b[3] {
-                continue;
-            }
-        }
-    }
-    true
-}
 
 fn indexed_segments<W: WireSource + ?Sized>(wires: &W) -> Option<Vec<IndexedSegment>> {
     let refs = wires.segments()?;
@@ -2847,5 +2836,148 @@ mod ext_tests {
             "z should be the true height, got {}",
             hi.z
         );
+    }
+
+    /// Minimal indexed WireSource: plain wires plus a SegmentRef per polyline
+    /// segment, so `snap()` runs the budget-counted sorted sweep path.
+    struct IndexedWires {
+        wires: Vec<WireModel>,
+        segments: Vec<crate::scene::pick::interaction_index::SegmentRef>,
+    }
+
+    impl IndexedWires {
+        fn new(wires: Vec<WireModel>) -> Self {
+            let segments = wires
+                .iter()
+                .enumerate()
+                .flat_map(|(wire, w)| {
+                    (0..w.points.len().saturating_sub(1))
+                        .map(|start| {
+                            crate::scene::pick::interaction_index::SegmentRef {
+                                wire: wire as u32,
+                                start: start as u32,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            Self { wires, segments }
+        }
+    }
+
+    impl WireSource for IndexedWires {
+        fn iter(&self) -> crate::scene::pick::interaction_index::WireIter<'_> {
+            // `self.wires.iter()` would resolve to the WireSource trait method
+            // on Vec (returning WireIter) rather than the slice's inherent
+            // iter — as_slice() pins the plain slice iterator.
+            crate::scene::pick::interaction_index::WireIter::All(self.wires.as_slice().iter())
+        }
+        fn len(&self) -> usize {
+            self.wires.len()
+        }
+        fn get(&self, index: usize) -> Option<&WireModel> {
+            self.wires.get(index)
+        }
+        fn segments(&self) -> Option<&[crate::scene::pick::interaction_index::SegmentRef]> {
+            Some(&self.segments)
+        }
+        fn source_wire(&self, index: u32) -> Option<&WireModel> {
+            self.wires.get(index as usize)
+        }
+    }
+
+    fn intersection_snapper() -> Snapper {
+        let mut s = Snapper::default();
+        s.snap_enabled = true;
+        // Default() ships with the full running-osnap set (Endpoint, Nearest,
+        // …); this fixture must exercise ONLY the Intersection sweep, so start
+        // from an empty mode set.
+        s.enabled.clear();
+        s.enabled.insert(SnapType::Intersection);
+        s.osnap_radius_px = 20.0;
+        s
+    }
+
+    fn snap_bounds() -> Rectangle {
+        Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 1000.0,
+            height: 1000.0,
+        }
+    }
+
+    #[test]
+    fn intersection_sweep_within_budget_finds_crossing() {
+        let s = intersection_snapper();
+        let wires = IndexedWires::new(vec![
+            WireModel {
+                text_verts: Vec::new(),
+                points: vec![[-10.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
+                ..Default::default()
+            },
+            WireModel {
+                text_verts: Vec::new(),
+                points: vec![[0.5, -10.0, 0.0], [0.5, 10.0, 0.0]],
+                ..Default::default()
+            },
+        ]);
+        let hit = s
+            .snap(
+                DVec3::new(0.5, 0.01, 0.0),
+                Point::new(750.0, 495.0),
+                &wires,
+                Mat4::IDENTITY,
+                DVec3::ZERO,
+                snap_bounds(),
+                Vec3::ZERO,
+                (Vec3::X, Vec3::Y, Vec3::Z),
+                None,
+            )
+            .expect("crossing within budget must snap");
+        assert_eq!(hit.snap_type, SnapType::Intersection);
+        assert!((hit.world.x - 0.5).abs() < 1e-9 && hit.world.y.abs() < 1e-9);
+    }
+
+    #[test]
+    fn intersection_sweep_over_budget_discards_partial_hits() {
+        let s = intersection_snapper();
+        // 1003 mutually X-overlapping segments → more than the 500 000-pair
+        // work budget: the sweep aborts mid-way and must discard everything it
+        // buffered — including a real crossing — matching the old probe-gated
+        // skip. The horizontals sit on a half-step offset so none passes
+        // exactly through the cursor (an exact hit would legitimately end the
+        // sweep early, before the budget is spent).
+        let mut wires = vec![WireModel {
+            text_verts: Vec::new(),
+            points: vec![[-10.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
+            ..Default::default()
+        }];
+        for i in 0..1001 {
+            let y = 0.0005 + i as f32 * 0.001;
+            wires.push(WireModel {
+                text_verts: Vec::new(),
+                points: vec![[0.0, y, 0.0], [1.0, y, 0.0]],
+                ..Default::default()
+            });
+        }
+        wires.push(WireModel {
+            text_verts: Vec::new(),
+            points: vec![[0.5, -10.0, 0.0], [0.5, 10.0, 0.0]],
+            ..Default::default()
+        });
+        let wires = IndexedWires::new(wires);
+        let hit = s.snap(
+            DVec3::new(0.5, 0.01, 0.0),
+            Point::new(750.0, 495.0),
+            &wires,
+            Mat4::IDENTITY,
+            DVec3::ZERO,
+            snap_bounds(),
+            Vec3::ZERO,
+            (Vec3::X, Vec3::Y, Vec3::Z),
+            None,
+        );
+        assert!(hit.is_none(), "over-budget sweep must leave the pass empty: {hit:?}");
     }
 }

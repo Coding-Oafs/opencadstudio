@@ -8,9 +8,11 @@ use acadrust::types::{Transform, Vector3};
 use acadrust::{Entity, EntityType, Handle};
 
 /// Above this many selected objects the Properties panel skips per-entity
-/// property aggregation (which is O(n) per row, plus an O(n²) group filter) and
-/// shows a count-only summary instead. Bulk edits still go through the ribbon.
-const MAX_PROP_AGGREGATE: usize = 2_000;
+/// property aggregation (each entity still pays its own row build) and shows a
+/// count-only summary instead. Aggregation itself is a single indexed pass
+/// since the O(n²) pairwise fold was removed, so this guard is about the
+/// per-entity row-build cost, not the merge.
+const MAX_PROP_AGGREGATE: usize = 20_000;
 
 fn visual_style_properties_text(style: &acadrust::objects::VisualStyle) -> String {
     style
@@ -2082,15 +2084,73 @@ pub(super) fn aggregate_sections(
         return vec![];
     }
 
-    let mut all_sections: Vec<Vec<crate::scene::model::object::PropSection>> = selected
+    // Accumulate in place against the first entity's rows instead of folding
+    // pairwise merges: the fold re-cloned every row and linearly searched the
+    // other side per section/prop, which squared into multi-second stalls on
+    // large selections (and forced the MAX_PROP_AGGREGATE count-only cliff).
+    // An index per title/field makes each later entity O(its own rows).
+    let mut result =
+        dispatch::properties_sectioned(selected[0].0, selected[0].1, text_style_names);
+    // Section titles are owned because they borrow no further — `field` keys
+    // are `&'static str` and need no such care.
+    let mut section_index: rustc_hash::FxHashMap<String, usize> = result
         .iter()
-        .map(|(handle, entity)| dispatch::properties_sectioned(*handle, entity, text_style_names))
+        .enumerate()
+        .map(|(index, section)| (section.title.clone(), index))
         .collect();
+    // field -> prop position within the section with the same index.
+    let mut prop_index: Vec<rustc_hash::FxHashMap<&'static str, usize>> =
+        result.iter().map(|section| {
+            section
+                .props
+                .iter()
+                .enumerate()
+                .map(|(index, prop)| (prop.field, index))
+                .collect()
+        }).collect();
+    // Sections/props only the first entity has must not survive the merge;
+    // track how many entities confirmed each row.
+    let mut prop_seen: Vec<rustc_hash::FxHashSet<&'static str>> =
+        result.iter().map(|section| {
+            section.props.iter().map(|prop| prop.field).collect()
+        }).collect();
+    let mut section_seen: rustc_hash::FxHashSet<String> =
+        section_index.keys().cloned().collect();
 
-    let mut result = all_sections.remove(0);
-    for sections in all_sections {
-        result = merge_sections(&result, &sections);
+    for (handle, entity) in &selected[1..] {
+        for section in dispatch::properties_sectioned(*handle, entity, text_style_names) {
+            let Some(&section_pos) = section_index.get(&section.title) else {
+                continue;
+            };
+            section_seen.remove(&section.title);
+            let props = &mut result[section_pos];
+            let fields = &mut prop_index[section_pos];
+            let seen = &mut prop_seen[section_pos];
+            for prop in section.props {
+                match fields.get(prop.field).copied() {
+                    Some(prop_pos) => {
+                        let row = &mut props.props[prop_pos];
+                        row.value = merge_prop_value(&row.value, &prop.value);
+                        seen.remove(prop.field);
+                    }
+                    None => continue,
+                }
+            }
+        }
     }
+    // A row the later entities never confirmed (or stopped confirming) drops
+    // out, exactly like the old intersecting merges did.
+    for (section_pos, section) in result.iter_mut().enumerate() {
+        let seen = &prop_seen[section_pos];
+        if !seen.is_empty() {
+            section
+                .props
+                .retain(|prop| !seen.contains(&prop.field));
+        }
+    }
+    result.retain(|section| !section_seen.contains(&section.title));
+    result.retain(|section| !section.props.is_empty());
+
     // Sum the filled area while individual Area rows may still vary.
     if selected.len() > 1
         && selected

@@ -1164,11 +1164,7 @@ impl OpenCADStudio {
                                 .values_mut()
                                 .find_map(|o| {
                                     if let ObjectType::MultiLeaderStyle(s) = o {
-                                        if s.name == style_name {
-                                            Some(s)
-                                        } else {
-                                            None
-                                        }
+                                        if s.name == style_name { Some(s) } else { None }
                                     } else {
                                         None
                                     }

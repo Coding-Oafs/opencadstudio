@@ -713,10 +713,34 @@ impl OpenCADStudio {
         task
     }
 
+    /// DIMBREAK and DIMJOGLINE staged their whole pick sequence just to report
+    /// that nothing can be stored yet. Cancel either one, with that message,
+    /// the moment it answers its first prompt. Returns true when it cancelled.
+    fn cancel_unimplemented_dim_cmd(&mut self, i: usize) -> bool {
+        let message = match self.tabs[i].active_cmd.as_ref().map(|c| c.name()) {
+            Some("DIMBREAK") => crate::t!("DIMBREAK: not yet implemented — nothing changed."),
+            Some("DIMJOGLINE") => crate::t!("DIMJOGLINE: not yet implemented — nothing changed."),
+            _ => return false,
+        };
+        self.command_line.push_info(message.as_ref());
+        self.tabs[i].active_cmd = None;
+        self.tabs[i].snap_result = None;
+        true
+    }
+
     fn apply_cmd_result_inner(&mut self, result: CmdResult) -> Task<Message> {
         let i = self.active_tab;
         match result {
             CmdResult::NeedPoint => {
+                // DIMBREAK / DIMJOGLINE have no break-gap or jog field in the
+                // dimension model yet, so their pick sequences could only end
+                // in "nothing changed" (#181 / DIM-019 / DIM-020). Cancel at
+                // the first answered prompt instead of walking every stage;
+                // the ReplaceEntity sentinels further down remain as the
+                // backstop for any path that still emits them.
+                if self.cancel_unimplemented_dim_cmd(i) {
+                    return Task::none();
+                }
                 // ATTEDIT finished its entity pick: hand the chosen block off to
                 // the attribute editor dialog and end the command (open_attribute
                 // _editor reports "no attributes" / "select a block" as needed).
@@ -3139,7 +3163,6 @@ impl OpenCADStudio {
                     self.tabs[i].active_cmd = None;
                     return Task::none();
                 }
-                use crate::modules::insert::solid3d_cmds::empty_solid3d;
                 use crate::scene::model::sweep_model;
 
                 let profile_ent = self.tabs[i]
@@ -3158,27 +3181,32 @@ impl OpenCADStudio {
                     .zip(path_ent)
                     .and_then(|(profile, path)| sweep_model::swept(&profile, &path, color));
 
-                if let Some(mut set) = result {
+                if let Some(set) = result {
                     let pending = self.begin_undo(i, "SWEEP", 1, true);
-                    let mut entity = empty_solid3d();
-                    if let acadrust::EntityType::Solid3D(solid) = &mut entity {
-                        let center = set.metrics.centroid;
-                        solid.point_of_reference =
-                            acadrust::types::Vector3::new(center[0], center[1], center[2]);
-                    }
-                    let new_handle = self.tabs[i].scene.add_entity(entity);
-                    if let Some(history) = history {
-                        self.tabs[i].scene.create_solid_history(new_handle, history);
-                    }
-                    for mesh in &mut set.lods {
-                        mesh.name = format!("{}", new_handle.value());
-                    }
-                    self.tabs[i].scene.meshes.insert(new_handle, set);
-                    self.tabs[i].dirty = true;
-                    self.command_line
-                        .push_output(crate::t!("SWEEP: solid created.").as_ref());
-                    if let Some(pd) = pending {
-                        self.commit_undo_delta(i, pd);
+                    // The kernel has no Body-producing sweep, so persist the
+                    // tessellation as a real Mesh entity. The old placeholder
+                    // Solid3D kept the geometry only in the volatile scene
+                    // cache — a save and reopen silently deleted the solid.
+                    // `add_entity` tessellates the entity into the render
+                    // cache itself.
+                    let layer = self.tabs[i].active_layer.clone();
+                    let entity = set.to_mesh_entity(&layer);
+                    if let Some(entity) = entity {
+                        let new_handle = self.tabs[i].scene.add_entity(entity);
+                        if let Some(history) = history {
+                            self.tabs[i].scene.create_solid_history(new_handle, history);
+                        }
+                        self.tabs[i].dirty = true;
+                        self.command_line
+                            .push_output(crate::t!("SWEEP: solid created.").as_ref());
+                        if let Some(pd) = pending {
+                            self.commit_undo_delta(i, pd);
+                        }
+                    } else {
+                        self.command_line.push_error(
+                            crate::t!("SWEEP: could not sweep the profile along the path.")
+                                .as_ref(),
+                        );
                     }
                 } else {
                     self.command_line.push_error(
@@ -3202,33 +3230,33 @@ impl OpenCADStudio {
                     self.tabs[i].active_cmd = None;
                     return Task::none();
                 }
-                use crate::modules::insert::solid3d_cmds::empty_solid3d;
                 use crate::scene::model::sweep_model;
 
                 let profiles: Vec<acadrust::EntityType> = handles
                     .iter()
                     .filter_map(|handle| self.tabs[i].scene.document.get_entity(*handle).cloned())
                     .collect();
-                if let Some(mut set) = sweep_model::lofted(&profiles, color) {
+                if let Some(set) = sweep_model::lofted(&profiles, color) {
                     let history = crate::scene::model::solid_history::loft_op(&profiles);
                     let pending = self.begin_undo(i, "LOFT", 1, true);
-                    let mut entity = empty_solid3d();
-                    if let acadrust::EntityType::Solid3D(solid) = &mut entity {
-                        let center = set.metrics.centroid;
-                        solid.point_of_reference =
-                            acadrust::types::Vector3::new(center[0], center[1], center[2]);
-                    }
-                    let new_handle = self.tabs[i].scene.add_entity(entity);
-                    self.tabs[i].scene.create_solid_history(new_handle, history);
-                    for mesh in &mut set.lods {
-                        mesh.name = format!("{}", new_handle.value());
-                    }
-                    self.tabs[i].scene.meshes.insert(new_handle, set);
-                    self.tabs[i].dirty = true;
-                    self.command_line
-                        .push_output(crate::t!("LOFT: solid created.").as_ref());
-                    if let Some(pd) = pending {
-                        self.commit_undo_delta(i, pd);
+                    // Same persistence story as SWEEP: a real Mesh entity
+                    // rather than a placeholder solid whose geometry lived
+                    // only in the volatile scene cache.
+                    let layer = self.tabs[i].active_layer.clone();
+                    let entity = set.to_mesh_entity(&layer);
+                    if let Some(entity) = entity {
+                        let new_handle = self.tabs[i].scene.add_entity(entity);
+                        self.tabs[i].scene.create_solid_history(new_handle, history);
+                        self.tabs[i].dirty = true;
+                        self.command_line
+                            .push_output(crate::t!("LOFT: solid created.").as_ref());
+                        if let Some(pd) = pending {
+                            self.commit_undo_delta(i, pd);
+                        }
+                    } else {
+                        self.command_line.push_error(
+                            crate::t!("LOFT: select at least two closed profiles.").as_ref(),
+                        );
                     }
                 } else {
                     self.command_line.push_error(
@@ -3519,8 +3547,20 @@ impl OpenCADStudio {
             }
             CmdResult::UndoDocument => {
                 let active = self.tabs[i].active_cmd.take();
+                let keep_scene = active.is_some();
+                // undo_active_tab's finish_history_apply tears down the whole
+                // command-scene state — preview wire, snap marker — along with
+                // the command itself. Restoring the command alone left it
+                // running blind until the next mouse move, so snapshot that
+                // state with the command and put both back together.
+                let preview_wires = std::mem::take(&mut self.tabs[i].scene.preview_wires);
+                let snap_result = self.tabs[i].snap_result;
                 self.undo_active_tab();
                 self.tabs[i].active_cmd = active;
+                if keep_scene {
+                    self.tabs[i].scene.preview_wires = preview_wires;
+                    self.tabs[i].snap_result = snap_result;
+                }
                 let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
                 if let Some(p) = prompt {
                     self.command_line.push_info(&p);

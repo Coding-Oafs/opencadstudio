@@ -18,6 +18,25 @@ use std::path::PathBuf;
 pub const DEFAULT_PLOT_STYLE: &str = "ocad.ctb";
 pub const MONOCHROME_PLOT_STYLE: &str = "monochrome.ctb";
 
+/// Empty means object color; otherwise require exactly six ASCII hex digits.
+/// Validate bytes before slicing so pasted Unicode cannot panic the editor.
+pub fn parse_color_override(value: &str) -> Result<Option<[u8; 3]>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let hex = value
+        .strip_prefix('#')
+        .filter(|hex| hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| "Color must be #RRGGBB, or blank to use the object color.".to_string())?;
+    let packed = u32::from_str_radix(hex, 16).map_err(|error| error.to_string())?;
+    Ok(Some([
+        (packed >> 16) as u8,
+        (packed >> 8) as u8,
+        packed as u8,
+    ]))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn plot_styles_dir() -> Result<PathBuf, String> {
     crate::config::config_dir()
@@ -82,8 +101,8 @@ pub fn available_ctb_names() -> Vec<String> {
 /// Lineweight table: index value → mm, matching the stored LWEIGHT codes.
 /// Index 0 = 0.00 mm (hairline), others follow the DXF lineweight enum.
 pub const LW_TABLE: &[f32] = &[
-    0.00, 0.05, 0.09, 0.10, 0.13, 0.15, 0.18, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50,
-    0.53, 0.60, 0.65, 0.70, 0.80, 0.90, 1.00, 1.06, 1.20, 1.40, 1.58, 2.00, 2.11,
+    0.00, 0.05, 0.09, 0.10, 0.13, 0.15, 0.18, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.53, 0.60,
+    0.65, 0.70, 0.80, 0.90, 1.00, 1.06, 1.20, 1.40, 1.58, 2.00, 2.11,
 ];
 
 // ── Per-color entry ───────────────────────────────────────────────────────────
@@ -326,7 +345,11 @@ impl PlotStyleTable {
                 "  linepattern_size={}\n  linetype={}\n  adaptive_linetype={}\n",
                 entry.linepattern_size,
                 entry.linetype,
-                if entry.adaptive_linetype { "TRUE" } else { "FALSE" }
+                if entry.adaptive_linetype {
+                    "TRUE"
+                } else {
+                    "FALSE"
+                }
             ));
             s.push_str(&format!("  lineweight={}\n", entry.lineweight));
             s.push_str(&format!(
@@ -349,6 +372,9 @@ impl PlotStyleTable {
 ///
 fn decompress_ctb(data: &[u8]) -> Result<String, String> {
     const PREFIX: &[u8] = b"PIAFILEVERSION_2.0,CTBVER1,compress\r\npmzlibcodec";
+    // Plot styles are small tables, including named STB styles. Limit actual
+    // expansion as well as the declared size so damaged files cannot exhaust RAM.
+    const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
     let mut decoded = Vec::new();
     if data.starts_with(PREFIX) {
         if data.len() < 60 {
@@ -356,6 +382,9 @@ fn decompress_ctb(data: &[u8]) -> Result<String, String> {
         }
         let checksum = u32::from_le_bytes(data[48..52].try_into().unwrap());
         let text_len = u32::from_le_bytes(data[52..56].try_into().unwrap()) as usize;
+        if text_len > MAX_TEXT_BYTES {
+            return Err("Plot style content exceeds the 16 MiB safety limit".into());
+        }
         let compressed_len = u32::from_le_bytes(data[56..60].try_into().unwrap()) as usize;
         if compressed_len > data.len() - 60 {
             return Err("CTB compressed payload is truncated".into());
@@ -366,6 +395,7 @@ fn decompress_ctb(data: &[u8]) -> Result<String, String> {
         }
         use flate2::read::ZlibDecoder;
         ZlibDecoder::new(payload)
+            .take((MAX_TEXT_BYTES + 1) as u64)
             .read_to_end(&mut decoded)
             .map_err(|e| format!("CTB zlib decompress: {e}"))?;
         if decoded.len() != text_len {
@@ -384,14 +414,19 @@ fn decompress_ctb(data: &[u8]) -> Result<String, String> {
         if payload.starts_with(&[0x78]) {
             use flate2::read::ZlibDecoder;
             ZlibDecoder::new(payload)
+                .take((MAX_TEXT_BYTES + 1) as u64)
                 .read_to_end(&mut decoded)
                 .map_err(|e| format!("legacy CTB zlib decompress: {e}"))?;
         } else {
             use flate2::read::DeflateDecoder;
             DeflateDecoder::new(payload)
+                .take((MAX_TEXT_BYTES + 1) as u64)
                 .read_to_end(&mut decoded)
                 .map_err(|e| format!("legacy CTB deflate decompress: {e}"))?;
         }
+    }
+    if decoded.len() > MAX_TEXT_BYTES {
+        return Err("Plot style content exceeds the 16 MiB safety limit".into());
     }
     if decoded.last() == Some(&0) {
         decoded.pop();
@@ -544,12 +579,8 @@ fn parse_plot_style_text(text: &str, name: String, is_stb: bool) -> Result<PlotS
                 "physical_pen_number" => {
                     style.entry.physical_pen_number = value.parse().unwrap_or(0)
                 }
-                "virtual_pen_number" => {
-                    style.entry.virtual_pen_number = value.parse().unwrap_or(0)
-                }
-                "linepattern_size" => {
-                    style.entry.linepattern_size = value.parse().unwrap_or(0.5)
-                }
+                "virtual_pen_number" => style.entry.virtual_pen_number = value.parse().unwrap_or(0),
+                "linepattern_size" => style.entry.linepattern_size = value.parse().unwrap_or(0.5),
                 "linetype" => style.entry.linetype = value.parse().unwrap_or(31),
                 "adaptive_linetype" => {
                     style.entry.adaptive_linetype = value.eq_ignore_ascii_case("TRUE")
@@ -652,16 +683,52 @@ fn parse_legacy_plot_style_text(
             }
             "screen" => entry.screening = value.parse::<u8>().unwrap_or(100).min(100),
             "lineweight" => entry.lineweight = value.parse().unwrap_or(0),
-            "color1" if value.starts_with('#') && value.len() == 7 => {
-                entry.color = Some([
-                    u8::from_str_radix(&value[1..3], 16).unwrap_or(0),
-                    u8::from_str_radix(&value[3..5], 16).unwrap_or(0),
-                    u8::from_str_radix(&value[5..7], 16).unwrap_or(0),
-                ]);
-            }
+            "color1" if value.starts_with('#') => entry.color = parse_color_override(value)?,
             "color1" => entry.color = value.parse::<i32>().ok().and_then(unpack_plot_color),
             _ => {}
         }
     }
     Ok(table)
+}
+
+#[cfg(test)]
+mod color_input_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_plot_style_expansion_is_rejected() {
+        use std::io::Write;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        let chunk = [b' '; 65536];
+        for _ in 0..257 {
+            encoder.write_all(&chunk).unwrap();
+        }
+        let mut legacy = b"legacy\n".to_vec();
+        legacy.extend(encoder.finish().unwrap());
+        assert!(decompress_ctb(&legacy)
+            .unwrap_err()
+            .contains("safety limit"));
+    }
+
+    #[test]
+    fn color_input_accepts_hex_and_rejects_unicode_without_panicking() {
+        assert_eq!(
+            parse_color_override(" #aB12ef ").unwrap(),
+            Some([171, 18, 239])
+        );
+        assert_eq!(parse_color_override(" ").unwrap(), None);
+        for value in ["#aéabc", "#GG0011", "#123", "123456", "#1234567"] {
+            assert!(parse_color_override(value).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn malformed_legacy_plot_color_reports_error() {
+        assert!(parse_legacy_plot_style_text(
+            "begin_plot_style\ncolor1=#aéabc\nend_plot_style",
+            "bad.ctb".into(),
+            false
+        )
+        .is_err());
+    }
 }

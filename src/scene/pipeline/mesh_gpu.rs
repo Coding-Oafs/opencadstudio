@@ -1564,12 +1564,32 @@ fn material_vertex_params(
 /// wire-index buffer (6 u32 = 24 B/triangle — the fattest index buffer) are
 /// bounded; a single mesh too large for one chunk is split into triangle-soup
 /// sub-chunks so an XREF-heavy model can never overflow a single buffer (#203).
+/// Which rung of each set's LOD ladder feeds the batch.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LodPick {
+    /// Highest detail (LOD 0) — the resident batch and every picking path.
+    Finest,
+    /// Coarsest generated LOD — the navigation-time batch, so orbiting a
+    /// large model draws a fraction of the triangles until the view settles.
+    Coarsest,
+}
+
+fn pick_lod<'a>(lods: &'a [MeshModel], pick: LodPick) -> Option<&'a MeshModel> {
+    match pick {
+        LodPick::Finest => lods.iter().find(|mesh| !mesh.indices.is_empty()),
+        LodPick::Coarsest => lods
+            .iter()
+            .filter(|mesh| !mesh.indices.is_empty())
+            .next_back(),
+    }
+}
+
 pub fn build_mesh_batch(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     sets: &[MeshLodSet],
 ) -> (Vec<MeshBatchChunk>, u64) {
-    build_mesh_batch_filtered(device, queue, sets, None)
+    build_mesh_batch_filtered(device, queue, sets, None, LodPick::Finest)
 }
 
 pub fn build_mesh_batch_filtered(
@@ -1577,6 +1597,7 @@ pub fn build_mesh_batch_filtered(
     queue: &wgpu::Queue,
     sets: &[MeshLodSet],
     handles: Option<&rustc_hash::FxHashSet<acadrust::Handle>>,
+    lod: LodPick,
 ) -> (Vec<MeshBatchChunk>, u64) {
     let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
     // Derive the caps from the real device limit and vertex size. The previous
@@ -1605,11 +1626,7 @@ pub fn build_mesh_batch_filtered(
     let mut face_partitions: rustc_hash::FxHashMap<FacePartitionKey, Vec<CachedFacePart<'_>>> =
         rustc_hash::FxHashMap::default();
     for set in sets {
-        let Some(mesh) = set
-            .geometry_lods()
-            .iter()
-            .find(|mesh| !mesh.indices.is_empty())
-        else {
+        let Some(mesh) = pick_lod(set.geometry_lods(), lod) else {
             continue;
         };
         let display_handle = set.entity_handle();
@@ -2278,4 +2295,42 @@ pub fn build_mesh_batch_filtered(
         );
     }
     (chunks, total_tris)
+}
+
+#[cfg(test)]
+mod lod_pick_tests {
+    use super::{pick_lod, LodPick, MeshModel};
+
+    fn model(triangles: u32) -> MeshModel {
+        MeshModel {
+            name: String::new(),
+            verts: Vec::new(),
+            verts_low: Vec::new(),
+            normals: Vec::new(),
+            indices: (0..triangles * 3).collect(),
+            triangle_material_handles: Vec::new(),
+            triangle_colors: Vec::new(),
+            color: [1.0; 4],
+            selected: false,
+        }
+    }
+
+    #[test]
+    fn finest_picks_first_and_coarsest_picks_last_non_empty() {
+        let lods = vec![model(0), model(9), model(0), model(3)];
+        // LOD ladder: [empty, fine, empty, coarse]. Finest must skip the
+        // empty LOD 0 (the previous code took "first non-empty", which is
+        // LOD 1 — the highest detail); coarsest takes the last non-empty.
+        assert_eq!(9 * 3, pick_lod(&lods, LodPick::Finest).unwrap().indices.len());
+        assert_eq!(3 * 3, pick_lod(&lods, LodPick::Coarsest).unwrap().indices.len());
+    }
+
+    #[test]
+    fn single_lod_ladder_returns_the_same_mesh_for_both_picks() {
+        let lods = vec![model(4)];
+        assert!(pick_lod(&lods, LodPick::Finest).is_some());
+        assert!(pick_lod(&lods, LodPick::Coarsest).is_some());
+        assert!(pick_lod(&[], LodPick::Finest).is_none());
+        assert!(pick_lod(&[], LodPick::Coarsest).is_none());
+    }
 }

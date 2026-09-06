@@ -640,9 +640,10 @@ impl Scene {
             crate::entities::solid3d::display_deflection(&self.document.header, facet_res);
         let isolines = self.document.header.isolines.max(0) as usize;
         use crate::par::prelude::*;
-        let built: Vec<(Handle, MeshLodSet, bool)> = entries
+        let built: Vec<(Handle, MeshLodSet, Option<cadkernel::brep::Body>, bool)> = entries
             .into_par_iter()
             .filter_map(|(handle, entity, color, top_level)| {
+                let body = crate::scene::convert::solid3d_tess::lift_entity_body(&entity);
                 crate::entities::solid3d::tessellate_volume(
                     entity.as_ref(),
                     color,
@@ -673,16 +674,19 @@ impl Scene {
                     } else {
                         mesh
                     };
-                    (handle, mesh, top_level)
+                    (handle, mesh, body, top_level)
                 })
             })
             .collect();
-        for (handle, mut mesh, top_level) in built {
+        for (handle, mut mesh, body, top_level) in built {
             if top_level {
                 self.meshes.insert(handle, mesh);
             } else {
                 mesh.prepare_instance_source(handle);
                 self.block_meshes.insert(handle, mesh);
+            }
+            if let Some(body) = body {
+                self.solid_models.insert(handle, body);
             }
         }
     }
@@ -2180,9 +2184,10 @@ impl Scene {
         // Top-level solids: offset into the render frame, drawn flat.
         // Block-definition solids: keep block-local coords for per-INSERT
         // instancing (no offset applied here).
-        let built: Vec<(Handle, MeshLodSet, bool)> = entries
+        let built: Vec<(Handle, MeshLodSet, Option<cadkernel::brep::Body>, bool)> = entries
             .into_par_iter()
             .filter_map(|(handle, entity, color, top_level)| {
+                let body = crate::scene::convert::solid3d_tess::lift_entity_body(&entity);
                 crate::entities::solid3d::tessellate_volume(
                     &entity,
                     color,
@@ -2213,16 +2218,19 @@ impl Scene {
                     } else {
                         mesh
                     };
-                    (handle, mesh, top_level)
+                    (handle, mesh, body, top_level)
                 })
             })
             .collect();
-        for (handle, mut m, top_level) in built {
+        for (handle, mut m, body, top_level) in built {
             if top_level {
                 self.meshes.insert(handle, m);
             } else {
                 m.prepare_instance_source(handle);
                 self.block_meshes.insert(handle, m);
+            }
+            if let Some(body) = body {
+                self.solid_models.insert(handle, body);
             }
         }
 

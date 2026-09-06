@@ -6,11 +6,11 @@
 //! exposes the same machinery for user-configured servers, field maps, and
 //! source CRS with reprojection into the cloud CRS before fusion.
 
-use crate::urban::{
-    layer_cache_path, parse_geojson_collection, ReferenceCollection, ReferenceGeometry, UrbanLayer,
-    UrbanReferenceProvider,
-};
 use crate::Error;
+use crate::urban::{
+    ReferenceCollection, ReferenceGeometry, UrbanLayer, UrbanReferenceProvider, layer_cache_path,
+    parse_geojson_collection,
+};
 use serde::Serialize;
 use std::{
     fs::{self, OpenOptions},
@@ -564,7 +564,7 @@ fn reproject_collection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     /// Fake transport serving scripted responses per request.
     struct ScriptedTransport {
@@ -661,10 +661,11 @@ mod tests {
         assert_eq!(envelope["ymax"], json!(410.0));
         assert_eq!(envelope["spatialReference"]["wkid"], json!(6492));
         let page = &transport.seen[1];
-        assert!(page
-            .1
-            .iter()
-            .any(|(key, value)| key == "f" && value == "geojson"));
+        assert!(
+            page.1
+                .iter()
+                .any(|(key, value)| key == "f" && value == "geojson")
+        );
         assert!(page.1.iter().any(|(key, _)| key == "objectIds"));
 
         // The cache exists and a rerun uses it without touching the network.

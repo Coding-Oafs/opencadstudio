@@ -200,12 +200,9 @@ impl OpenCADStudio {
         match req["op"].as_str().unwrap_or("") {
             "new" => {
                 let i = self.active_tab;
-                self.tabs[i].scene.document = acadrust::CadDocument::new();
-                self.tabs[i].current_path = None;
-                // The headless session starts on the welcome (Start) tab, which
-                // blocks drawing commands; turn it into a real drawing.
-                self.tabs[i].is_start = false;
-                self.tabs[i].scene.bump_geometry();
+                // A document owns its history, selection, UCS, caches and edit
+                // lease. Reset all of them together, as the GUI's new tab does.
+                self.tabs[i] = super::DocumentTab::new_drawing(i + 1);
                 self.entity_summary()
             }
             "open" => {
@@ -243,7 +240,23 @@ impl OpenCADStudio {
                     .unwrap_or_else(|| path.to_string());
                 match crate::io::load_bytes(&name, bytes) {
                     Ok(doc) => {
+                        self.tabs[i] = super::DocumentTab::new_drawing(i + 1);
                         self.tabs[i].scene.document = doc;
+                        // Adopt CLAYER just as the desktop loader does. DWG
+                        // stores the handle; DXF can supply the name instead.
+                        let doc = &mut self.tabs[i].scene.document;
+                        let layer = doc
+                            .layers
+                            .iter()
+                            .find(|layer| layer.handle == doc.header.current_layer_handle)
+                            .or_else(|| doc.layers.get(&doc.header.current_layer_name))
+                            .or_else(|| doc.layers.get("0"))
+                            .map(|layer| (layer.name.clone(), layer.handle));
+                        if let Some((name, handle)) = layer {
+                            doc.header.current_layer_name = name.clone();
+                            doc.header.current_layer_handle = handle;
+                            self.tabs[i].active_layer = name;
+                        }
                         crate::app::style_ops::ensure_standard_styles(
                             &mut self.tabs[i].scene.document,
                         );
@@ -460,6 +473,69 @@ impl OpenCADStudio {
 #[cfg(test)]
 mod tests {
     use crate::app::OpenCADStudio;
+
+    #[test]
+    fn new_document_clears_history_selection_and_ucs() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,0"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"CIRCLE 5,5 3"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"UCS Z 90"}"#);
+        app.automation_op(r#"{"op":"select","type":"Line"}"#);
+        app.automation_op(r#"{"op":"new"}"#);
+        assert!(app.tabs[app.active_tab].active_ucs.is_none());
+        assert!(app.tabs[app.active_tab]
+            .scene
+            .selected_entities()
+            .is_empty());
+        assert_eq!(app.automation_op(r#"{"op":"undo"}"#)["total"], 0);
+        assert_eq!(app.automation_op(r#"{"op":"redo"}"#)["total"], 0);
+    }
+
+    #[test]
+    fn opening_another_document_clears_history_and_failed_open_preserves_it() {
+        let mut app = OpenCADStudio::new_for_test();
+        let path =
+            std::env::temp_dir().join(format!("ocs_open_isolation_{}.dxf", std::process::id()));
+        app.automation_op(r#"{"op":"new"}"#);
+        {
+            use acadrust::TableEntry;
+            let doc = &mut app.tabs[app.active_tab].scene.document;
+            let mut layer = acadrust::tables::Layer::new("Survey");
+            layer.handle = doc.allocate_handle();
+            let handle = layer.handle;
+            doc.layers.add(layer).unwrap();
+            doc.header.current_layer_name = "Survey".to_string();
+            doc.header.current_layer_handle = handle;
+            app.tabs[app.active_tab].active_layer = "Survey".to_string();
+            let mut line = acadrust::entities::Line::from_points(
+                acadrust::types::Vector3::new(0.0, 0.0, 0.0),
+                acadrust::types::Vector3::new(1.0, 0.0, 0.0),
+            );
+            line.common.layer = "Survey".to_string();
+            app.tabs[app.active_tab]
+                .scene
+                .add_entity(acadrust::EntityType::Line(line));
+        }
+        let saved = app.automation_op(&serde_json::json!({"op":"save", "path":path}).to_string());
+        assert_eq!(saved["ok"], true, "{saved}");
+        app.automation_op(r#"{"op":"new"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,0"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"CIRCLE 5,5 3"}"#);
+        let missing = path.with_extension("missing.dxf");
+        let request =
+            |path: &std::path::Path| serde_json::json!({"op":"open", "path":path}).to_string();
+        assert_eq!(app.automation_op(&request(&missing))["ok"], false);
+        assert_eq!(app.automation_op(r#"{"op":"entities"}"#)["total"], 2);
+        assert_eq!(app.automation_op(&request(&path))["total"], 1);
+        assert_eq!(app.automation_op(r#"{"op":"undo"}"#)["total"], 1);
+        assert_eq!(app.automation_op(r#"{"op":"redo"}"#)["total"], 1);
+        // NEW must release the previous file's edit lease too.
+        app.automation_op(r#"{"op":"new"}"#);
+        let lease = crate::io::edit_lock::EditLease::acquire(&path).unwrap();
+        drop(lease);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn automation_ops_round_trip() {

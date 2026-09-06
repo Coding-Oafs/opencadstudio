@@ -83,6 +83,10 @@ pub struct PointStyle {
     /// Linear RGBA per class; unknown classes use the table's fallback.
     pub class_colors: [[f32; 4]; CLASS_COUNT],
     pub intensity_range: [f32; 2],
+    /// Elevation gradient input stored as the Z range's (midpoint,
+    /// half-width), computed in f64 from the source range before the cast.
+    /// The shader re-bases each point's double-single Z onto the midpoint so
+    /// the gradient stays smooth at state-plane elevations.
     pub elevation_range: [f32; 2],
     /// Active cross-section filter; `None` shows everything.
     pub section: Option<Section>,

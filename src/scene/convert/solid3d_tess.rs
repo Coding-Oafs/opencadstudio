@@ -1,5 +1,6 @@
 use acadrust::entities::acis::{SabReader, SatBody, SatDocument};
 use acadrust::entities::{Body, Region, Solid3D};
+use acadrust::EntityType;
 
 use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 
@@ -138,16 +139,69 @@ pub(crate) fn finalize_mesh(
     }
 }
 
-fn parse_acis(
+pub(crate) fn parse_acis(
+    handle: &str,
     sat_fn: impl FnOnce() -> Option<SatDocument>,
     is_binary: bool,
     sab_data: &[u8],
 ) -> Option<SatDocument> {
-    sat_fn().or_else(|| {
-        (is_binary && !sab_data.is_empty())
-            .then(|| SabReader::read(sab_data).ok())
-            .flatten()
-    })
+    if let Some(document) = sat_fn() {
+        return Some(document);
+    }
+    if is_binary && !sab_data.is_empty() {
+        return match SabReader::read(sab_data) {
+            Ok(document) => Some(document),
+            Err(error) => {
+                crate::perf_record!("[acis] entity {handle}: SAB decode failed ({error:?})");
+                None
+            }
+        };
+    }
+    crate::perf_record!("[acis] entity {handle}: SAT decode failed");
+    None
+}
+
+/// Decode the ACIS payload carried by any volume entity.
+///
+/// Keeping this beside the display parser guarantees that the editable-body
+/// cache and the tessellator accept exactly the same SAT/SAB inputs.  Opened
+/// DWGs often carry SAB rather than text SAT, so calling `parse_sat()` alone
+/// would make an on-screen solid mysteriously unavailable to booleans.
+pub(crate) fn entity_sat(entity: &EntityType) -> Option<SatDocument> {
+    match entity {
+        EntityType::Solid3D(solid) => parse_acis(
+            &solid.common.handle.value().to_string(),
+            || solid.parse_sat(),
+            solid.acis_data.is_binary,
+            &solid.acis_data.sab_data,
+        ),
+        EntityType::Region(region) => parse_acis(
+            &region.common.handle.value().to_string(),
+            || region.parse_sat(),
+            region.acis_data.is_binary,
+            &region.acis_data.sab_data,
+        ),
+        EntityType::Body(body) => parse_acis(
+            &body.common.handle.value().to_string(),
+            || body.parse_sat(),
+            body.acis_data.is_binary,
+            &body.acis_data.sab_data,
+        ),
+        EntityType::Surface(surface) => parse_acis(
+            &surface.common.handle.value().to_string(),
+            || surface.parse_sat(),
+            surface.acis_data.is_binary,
+            &surface.acis_data.sab_data,
+        ),
+        _ => None,
+    }
+}
+
+/// Editable kernel body for a file-backed ACIS entity.
+pub(crate) fn lift_entity_body(entity: &EntityType) -> Option<cadkernel::brep::Body> {
+    let name = entity.common().handle.value().to_string();
+    let sat = entity_sat(entity)?;
+    crate::scene::convert::acis_kernel::lift_editable_sat(&sat, &name)
 }
 
 fn remap_acis_material_bindings(set: &mut MeshLodSet, acis: &acadrust::entities::AcisData) {
@@ -186,14 +240,16 @@ pub fn tessellate_region(
     chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
+    let name = region.common.handle.value().to_string();
     let sat = parse_acis(
+        &name,
         || region.parse_sat(),
         region.acis_data.is_binary,
         &region.acis_data.sab_data,
     )?;
     finish(
         sat,
-        region.common.handle.value().to_string(),
+        name,
         color,
         facet_res,
         chordal_deflection,
@@ -209,14 +265,16 @@ pub fn tessellate_body(
     chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
+    let name = body.common.handle.value().to_string();
     let sat = parse_acis(
+        &name,
         || body.parse_sat(),
         body.acis_data.is_binary,
         &body.acis_data.sab_data,
     )?;
     finish(
         sat,
-        body.common.handle.value().to_string(),
+        name,
         color,
         facet_res,
         chordal_deflection,
@@ -232,14 +290,16 @@ pub fn tessellate_surface(
     chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
+    let name = surface.common.handle.value().to_string();
     let sat = parse_acis(
+        &name,
         || surface.parse_sat(),
         surface.acis_data.is_binary,
         &surface.acis_data.sab_data,
     )?;
     finish(
         sat,
-        surface.common.handle.value().to_string(),
+        name,
         color,
         facet_res,
         chordal_deflection,
@@ -255,14 +315,16 @@ pub fn tessellate_solid3d(
     chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
+    let name = solid.common.handle.value().to_string();
     let sat = parse_acis(
+        &name,
         || solid.parse_sat(),
         solid.acis_data.is_binary,
         &solid.acis_data.sab_data,
     )?;
     finish(
         sat,
-        solid.common.handle.value().to_string(),
+        name,
         color,
         facet_res,
         chordal_deflection,

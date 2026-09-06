@@ -15,7 +15,7 @@
 
 use crate::{Error, SamplePoint};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
@@ -292,11 +292,7 @@ struct RawHeader {
 
 impl RawHeader {
     fn classification_offset(&self) -> usize {
-        if self.point_format >= 6 {
-            16
-        } else {
-            15
-        }
+        if self.point_format >= 6 { 16 } else { 15 }
     }
 
     /// Fixed (non-extra-byte) record length for the point format.
@@ -333,9 +329,7 @@ impl RawHeader {
     fn laszip_vlr(&self) -> Option<&RawVlr> {
         self.vlrs
             .iter()
-            .find(|vlr| {
-                vlr.user_id == "laszip encoded" && vlr.record_id == LASZIP_RECORD_ID
-            })
+            .find(|vlr| vlr.user_id == "laszip encoded" && vlr.record_id == LASZIP_RECORD_ID)
     }
 
     fn wkt(&self) -> Option<&[u8]> {
@@ -1648,9 +1642,7 @@ pub fn classify_urban_tile(
     let mut out_vlrs: Vec<RawVlr> = header
         .vlrs
         .iter()
-        .filter(|vlr| {
-            !(vlr.user_id == "laszip encoded" && vlr.record_id == LASZIP_RECORD_ID)
-        })
+        .filter(|vlr| !(vlr.user_id == "laszip encoded" && vlr.record_id == LASZIP_RECORD_ID))
         .cloned()
         .collect();
     out_vlrs.push(label_extra_bytes_vlr());
@@ -2276,8 +2268,8 @@ mod tests {
             .unwrap()
             .expect("label present after classification");
         assert_eq!(info.label.offset, 29); // after the 29-byte records
-                                           // The validation pass compared every record byte in lockstep, so a
-                                           // successful return is the fidelity proof; check the histograms too.
+        // The validation pass compared every record byte in lockstep, so a
+        // successful return is the fidelity proof; check the histograms too.
         let labels = stats.upcp_label_counts.unwrap();
         assert_eq!(labels.get("99").and_then(Value::as_u64), Some(1)); // class 18 seeded
         assert_eq!(labels.get("0").and_then(Value::as_u64), Some(1)); // class 3 stays unknown
@@ -2318,15 +2310,17 @@ mod tests {
             overwrite_outputs: true,
             ..Default::default()
         };
-        assert!(classify_urban_tile(
-            &source,
-            &output_dir,
-            &settings,
-            &mut EmptyProvider,
-            &cancel,
-            &mut progress
-        )
-        .is_ok());
+        assert!(
+            classify_urban_tile(
+                &source,
+                &output_dir,
+                &settings,
+                &mut EmptyProvider,
+                &cancel,
+                &mut progress
+            )
+            .is_ok()
+        );
         // Classified outputs may not be re-classified (label dimension exists).
         let labelled = output_dir.join("tile_classified.laz");
         let settings = UrbanClassificationSettings::default();
@@ -2457,7 +2451,7 @@ mod tests {
              "geometry":{"type":"LineString","coordinates":[[0,0],[100,0],[100,100]]}}]}"#;
         let collection = parse_geojson_collection(roads).unwrap();
         let mask = build_road_mask(&collection, 1.0); // half width 11
-                                                      // Inside the corner rectangles.
+        // Inside the corner rectangles.
         assert!(mask.contains(50.0, 5.0));
         assert!(mask.contains(95.0, 50.0));
         // Beyond the corner on the outside: the mitre fill covers the wedge

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "OpenCADStudio"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "acadifc",
  "acadrust",
@@ -4122,6 +4122,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "spade",
  "ureq",
 ]
 

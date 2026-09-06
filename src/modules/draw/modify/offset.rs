@@ -709,14 +709,25 @@ impl CadCommand for OffsetCommand {
         // Each target offsets by its own through-distance (or the locked
         // magnitude), toward the clicked side.
         let mut news: Vec<EntityType> = Vec::new();
+        let mut on_object = 0usize;
         for entity in &targets {
             let mag = locked.unwrap_or_else(|| perp_distance(entity, pt.as_vec3()));
             if mag < 1e-9 {
+                // Through-mode pick landed on the object itself: no side was
+                // chosen, so there is nothing to offset toward.
+                on_object += 1;
                 continue;
             }
             news.extend(compute_offsets(entity, mag, pt.as_vec3()));
         }
         if news.is_empty() {
+            // A degenerate pick is not "nothing selected": say so instead of
+            // silently re-prompting.
+            if !targets.is_empty() && on_object == targets.len() {
+                return CmdResult::ReportMeasurement(
+                    t!("OFFSET: point is on the object — pick a point to the side.").into_owned(),
+                );
+            }
             return CmdResult::NeedPoint;
         }
         if multiple {

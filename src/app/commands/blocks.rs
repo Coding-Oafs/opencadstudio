@@ -667,7 +667,7 @@ impl OpenCADStudio {
                 });
                 match path {
                     Some(p) => {
-                        return Some(Task::done(Message::OpenRecent(std::path::PathBuf::from(p))))
+                        return Some(Task::done(Message::OpenRecent(std::path::PathBuf::from(p))));
                     }
                     None => self.command_line.push_error(
                         crate::t!("XOPEN: select an external reference (xref) to open.").as_ref(),

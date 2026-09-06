@@ -2620,15 +2620,28 @@ fn dimension_geometry(
             }
         }
         Dimension::Angular3Pt(d) => {
+            let (vertex, first, second) = (lv(d.angle_vertex), lv(d.first_point), lv(d.second_point));
+            let arc_point = lv(d.definition_point);
+            let angle_to = |p: Vec3| (p.y - vertex.y).atan2(p.x - vertex.x);
+            let (a_first, a_second) = (angle_to(first), angle_to(second));
+            let (start, end) = angular_sector(a_first, a_second, angle_to(arc_point));
+            // The selected sector can start at the second ray (the reflex
+            // side), and the extension lines pair each measured point with the
+            // arc end on its own ray, so hand the points over in sweep order.
+            let (from, to) = if start == a_first {
+                (first, second)
+            } else {
+                (second, first)
+            };
             append_angular_dimension(
                 &mut g,
-                lv(d.angle_vertex),
-                lv(d.first_point),
-                lv(d.second_point),
-                lv(d.definition_point),
+                vertex,
+                from,
+                to,
+                arc_point,
                 arrow1,
                 arrow2,
-                None,
+                Some((start, end)),
             );
         }
         Dimension::Ordinate(d) => {
@@ -2916,8 +2929,11 @@ fn two_line_angle_frame(
 
     // Two lines cross at four angles; the arc point picks one. Each line
     // contributes its direction and its reverse, so try the four pairs and keep
-    // the one whose sweep both contains the arc point and is the shorter way
-    // round — the dimension marks an angle, never its reflex twin.
+    // the one whose sweep contains the arc point — reflex sweeps included. A
+    // point on a ray sits on several sweeps at once, and a strictly interior
+    // point still falls in a reflex complement of its sector, so among the
+    // containing sweeps the smaller (non-reflex) one wins; reflex survives only
+    // when it is the sole sweep containing the point.
     let angle_of = |d: Vec3| d.y.atan2(d.x);
     let target = angle_of(arc_point - vertex);
     let mut best: Option<(f32, f32, f32)> = None;
@@ -2929,7 +2945,7 @@ fn two_line_angle_frame(
             // out is the one wanted whenever the lines are nearly parallel.
             for (start, end) in [(from_u, from_v), (from_v, from_u)] {
                 let sweep = (end - start).rem_euclid(std::f32::consts::TAU);
-                if sweep <= 1e-6 || sweep > std::f32::consts::PI {
+                if sweep <= 1e-6 {
                     continue;
                 }
                 let into_target = (target - start).rem_euclid(std::f32::consts::TAU);
@@ -2944,6 +2960,67 @@ fn two_line_angle_frame(
     }
     let (start, end, _) = best?;
     Some((vertex, start, end))
+}
+
+/// Start and end angle of the sector the arc point selects between two rays
+/// leaving one vertex at angles `a_first` and `a_second`. The sweep runs
+/// counter-clockwise from the returned start to the returned end — wrapping a
+/// negative difference up, as `append_angular_dimension` does — and may be
+/// reflex: a 3-point angular dimension measures whichever of the two sectors
+/// its arc point lies in, not just the smaller one. A point on either ray is
+/// on both sectors at once, and coincident rays enclose nothing; both fall
+/// back to the non-reflex way round, the same tie-break
+/// `two_line_angle_frame` applies at a line crossing.
+pub(crate) fn angular_sector(a_first: f32, a_second: f32, arc: f32) -> (f32, f32) {
+    let sweep = (a_second - a_first).rem_euclid(std::f32::consts::TAU);
+    if sweep <= 1e-6 {
+        return (a_first, a_second);
+    }
+    let off = (arc - a_first).rem_euclid(std::f32::consts::TAU);
+    if off > 0.0 && off < sweep {
+        (a_first, a_second)
+    } else if off > sweep {
+        (a_second, a_first)
+    } else if sweep <= std::f32::consts::PI {
+        (a_first, a_second)
+    } else {
+        (a_second, a_first)
+    }
+}
+
+/// Sector-aware angular measurement in degrees: the sweep the arc point
+/// selects — the same sweep the drawn arc follows — unlike
+/// `Dimension::measurement`, which always reports the minor angle between the
+/// rays. `None` where the sector rules have no answer (parallel two-line
+/// geometry, non-angular dimensions); callers fall back to the minor angle.
+fn angular_measurement(dim: &Dimension) -> Option<f64> {
+    let sweep = match dim {
+        Dimension::Angular3Pt(d) => {
+            let vertex = vec3_local(d.angle_vertex);
+            let angle_to = |p: acadrust::types::Vector3| {
+                let p = vec3_local(p);
+                (p.y - vertex.y).atan2(p.x - vertex.x)
+            };
+            let (start, end) = angular_sector(
+                angle_to(d.first_point),
+                angle_to(d.second_point),
+                angle_to(d.definition_point),
+            );
+            (end - start).rem_euclid(std::f32::consts::TAU)
+        }
+        Dimension::Angular2Ln(d) => {
+            let (_, start, end) = two_line_angle_frame(
+                vec3_local(d.first_point),
+                vec3_local(d.second_point),
+                vec3_local(d.angle_vertex),
+                vec3_local(d.definition_point),
+                vec3_local(d.dimension_arc),
+            )?;
+            (end - start).rem_euclid(std::f32::consts::TAU)
+        }
+        _ => return None,
+    };
+    Some(sweep.to_degrees() as f64)
 }
 
 fn append_angular_dimension(
@@ -3299,12 +3376,17 @@ fn dimension_text_parts(
     let base = dim.base();
     let is_angular = matches!(dim, Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_));
 
+    // The arc point selects the measured sector — reflex included — and the
+    // drawn arc follows it, so the text must measure the same sweep;
+    // acadrust's `measurement` always reports the minor angle.
+    let measurement = angular_measurement(dim).unwrap_or_else(|| dim.measurement());
+
     // Auto-generated body used when the user did not override it. Built first
     // so user_text "<>" substitution can re-use it.
     let primary_raw = if is_angular {
-        format_angular_value(dim.measurement(), style)
+        format_angular_value(measurement, style)
     } else {
-        let v = format_linear_value(dim.measurement(), style);
+        let v = format_linear_value(measurement, style);
         match dim {
             Dimension::Radius(_) | Dimension::LargeRadial(_) => format!("R{}", v),
             Dimension::Diameter(_) => format!("Ø{}", v),
@@ -3314,7 +3396,7 @@ fn dimension_text_parts(
 
     // Build tolerance / limits suffix separately so the caller can render
     // it as its own Text entity at DIMTFAC × DIMTXT height.
-    let tolerance_suffix = build_tolerance_suffix(dim.measurement(), style, is_angular);
+    let tolerance_suffix = build_tolerance_suffix(measurement, style, is_angular);
     let primary = apply_dimpost(&primary_raw, style);
 
     // Alternate units appended in brackets when DIMALT is on (linear only).
@@ -3558,9 +3640,14 @@ fn format_with_unit(value: f64, unit: i16, dec: usize, dimfrac: i16, zin: i16) -
 
 fn format_engineering(inches: f64, dec: usize) -> String {
     let sign = if inches < 0.0 { "-" } else { "" };
-    let abs = inches.abs();
-    let feet = (abs / 12.0).trunc();
-    let rem_in = abs - feet * 12.0;
+    // Quantize to the display tick first so inches that round up to 12 carry
+    // into the feet (11.9999" at 2 decimals is 1'-0.00", not 0'-12.00").
+    // Same reasoning as `format_architectural`'s integer ticks.
+    let scale = 10f64.powi(dec as i32);
+    let ticks = (inches.abs() * scale).round() as u64;
+    let per_foot = (12.0 * scale) as u64;
+    let feet = ticks / per_foot;
+    let rem_in = (ticks % per_foot) as f64 / scale;
     format!("{}{:.0}'-{:.*}\"", sign, feet, dec, rem_in)
 }
 
@@ -3688,16 +3775,21 @@ fn format_angular_value(measurement_deg: f64, style: Option<&DimStyle>) -> Strin
 
 fn format_dms(deg: f64, sec_dec: usize, azin: i16) -> String {
     let sign = if deg < 0.0 { "-" } else { "" };
-    let abs = deg.abs();
-    let d = abs.floor();
-    let m_full = (abs - d) * 60.0;
-    let m = m_full.floor();
-    let s = (m_full - m) * 60.0;
-    let s_str = format!("{:.*}", sec_dec, s);
-    let mut out = format!("{}{:.0}°{:.0}'{}\"", sign, d, m, s_str);
+    // Decompose on integer second-ticks, quantized to the display precision,
+    // so seconds that round up to 60 carry into the minutes — and on into
+    // the degrees — instead of printing 1°59'60.00". (1.9999999° at 2
+    // decimals reads 2°0'0.00".) Same reasoning as `format_architectural`'s
+    // integer inch ticks.
+    let scale = 10f64.powi(sec_dec as i32);
+    let sec_scale = scale as u64;
+    let ticks = (deg.abs() * 3600.0 * scale).round() as u64;
+    let d = ticks / (3600 * sec_scale);
+    let m = (ticks % (3600 * sec_scale)) / (60 * sec_scale);
+    let s = (ticks % (60 * sec_scale)) as f64 / sec_scale as f64;
+    let mut out = format!("{}{d:.0}°{m:.0}'{:.*}\"", sign, sec_dec, s);
     if azin & 4 != 0 {
-        // suppress 0° / 0' parts
-        if d == 0.0 {
+        // suppress a leading 0° part
+        if d == 0 {
             out = out.trim_start_matches('0').to_string();
             out = out.replacen("°", "", 1);
         }
@@ -4039,6 +4131,109 @@ pub(crate) fn dimension_text_grip_position(
 }
 
 #[cfg(test)]
+mod angular_sector_tests {
+    use super::{angular_sector, two_line_angle_frame};
+    use glam::Vec3;
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
+
+    // The wrapped sweep a consumer of (start, end) draws: negative
+    // differences wrap up to CCW, matching append_angular_dimension.
+    fn ccw(start: f32, end: f32) -> f32 {
+        (end - start).rem_euclid(TAU)
+    }
+
+    // The arc point picks the sector it lies in — here the CCW first→second
+    // one, which is also the non-reflex way round.
+    #[test]
+    fn arc_point_inside_ccw_sector_keeps_it() {
+        let (start, end) = angular_sector(0.0, FRAC_PI_2, FRAC_PI_4);
+        assert_eq!((start, end), (0.0, FRAC_PI_2));
+        assert!((ccw(start, end) - FRAC_PI_2).abs() < 1e-6);
+    }
+
+    // An arc point on the other side of the rays measures that sector, even
+    // though it is reflex: rays at 0° and 90° with the point at 270° must give
+    // the 270° sweep from the second ray back around to the first.
+    #[test]
+    fn arc_point_in_complement_selects_reflex_sweep() {
+        let (start, end) = angular_sector(0.0, FRAC_PI_2, -FRAC_PI_2);
+        assert_eq!((start, end), (FRAC_PI_2, 0.0));
+        assert!((ccw(start, end) - 1.5 * PI).abs() < 1e-5);
+    }
+
+    // A CCW sector larger than 180° whose interior holds the arc point must
+    // survive un-flipped; the old measured-sweep path clamped it to the minor
+    // twin no matter where the point was.
+    #[test]
+    fn reflex_ccw_sector_with_interior_point_is_kept() {
+        let (start, end) = angular_sector(0.0, 4.0, 2.0);
+        assert_eq!((start, end), (0.0, 4.0));
+        assert!(ccw(start, end) > PI);
+    }
+
+    // The same rays with the point outside that sector take the complement —
+    // the non-reflex way round.
+    #[test]
+    fn point_outside_reflex_sector_takes_complement() {
+        let (start, end) = angular_sector(0.0, 4.0, -1.0);
+        assert_eq!((start, end), (4.0, 0.0));
+        assert!((ccw(start, end) - (TAU - 4.0)).abs() < 1e-6);
+    }
+
+    // On a ray the point belongs to both sectors; the non-reflex one wins.
+    #[test]
+    fn point_on_a_ray_prefers_non_reflex() {
+        assert_eq!(angular_sector(0.0, FRAC_PI_2, 0.0), (0.0, FRAC_PI_2));
+        assert_eq!(angular_sector(0.0, FRAC_PI_2, FRAC_PI_2), (0.0, FRAC_PI_2));
+        // Rays more than half a turn apart CCW: the non-reflex side is the
+        // flipped pair.
+        assert_eq!(angular_sector(0.0, 4.0, 4.0), (4.0, 0.0));
+    }
+
+    // Coincident rays enclose nothing; the zero sweep survives so the renderer
+    // skips the arc rather than drawing a full circle.
+    #[test]
+    fn coincident_rays_enclose_nothing() {
+        assert_eq!(angular_sector(1.0, 1.0, 2.0), (1.0, 1.0));
+        assert!(ccw(1.0, 1.0) <= 1e-6);
+    }
+
+    // At a line crossing the four sectors partition the plane, so a strictly
+    // interior arc point still resolves to its own (non-reflex) sector even
+    // though reflex complements also contain it.
+    #[test]
+    fn two_line_crossing_picks_the_quadrant_of_the_arc_point() {
+        let frame = two_line_angle_frame(
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+        );
+        let (_, start, end) = frame.expect("perpendicular lines cross");
+        let sweep = ccw(start, end);
+        let target = FRAC_PI_4;
+        let into = (target - start).rem_euclid(TAU);
+        assert!(into <= sweep && (sweep - FRAC_PI_2).abs() < 1e-6);
+    }
+
+    // An arc point on one of the lines is on two sectors at once; the
+    // smaller sweep wins there.
+    #[test]
+    fn two_line_arc_point_on_a_line_prefers_the_smaller_sector() {
+        let frame = two_line_angle_frame(
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(2.0, 0.0, 0.0),
+        );
+        let (_, start, end) = frame.expect("perpendicular lines cross");
+        assert!(ccw(start, end) <= FRAC_PI_2 + 1e-6);
+    }
+}
+
+#[cfg(test)]
 mod dimtad_tests {
     use super::text_on_dim_line;
     use acadrust::types::Vector3;
@@ -4141,6 +4336,54 @@ mod arch_format_tests {
         assert_eq!(format_fractional(35.9999, 0), "36");
         assert_eq!(format_fractional(11.999, 0), "12");
         assert_eq!(format_fractional(6.5, 0), "6 1/2");
+    }
+}
+
+#[cfg(test)]
+mod engineering_dms_format_tests {
+    use super::{format_dms, format_engineering};
+
+    // The engineering formatter floor-decomposed feet and printed the inch
+    // remainder with rounding, so values just under a whole foot printed
+    // "0'-12.00"" instead of carrying into the feet.
+    #[test]
+    fn engineering_carries_inches_into_feet() {
+        assert_eq!(format_engineering(11.9999, 2), "1'-0.00\"");
+        assert_eq!(format_engineering(35.9999, 2), "3'-0.00\"");
+    }
+
+    #[test]
+    fn engineering_normal_values_unchanged() {
+        assert_eq!(format_engineering(30.5, 2), "2'-6.50\"");
+        assert_eq!(format_engineering(12.0, 4), "1'-0.0000\"");
+        assert_eq!(format_engineering(-6.25, 2), "-0'-6.25\"");
+        assert_eq!(format_engineering(0.0, 2), "0'-0.00\"");
+    }
+
+    // The DMS formatter floored each component and rounded only the seconds
+    // string, so seconds rounding to 60 printed "1°59'60.00"".
+    #[test]
+    fn dms_carries_seconds_into_minutes_and_degrees() {
+        assert_eq!(format_dms(1.9999999, 2, 0), "2°0'0.00\"");
+        // 59.9999 seconds rounds to a whole minute.
+        assert_eq!(format_dms(1.0 + 59.9999 / 3600.0, 2, 0), "1°1'0.00\"");
+        // 59.99999 minutes rounds to a whole degree at 2-decimal seconds.
+        assert_eq!(format_dms(59.99999 / 60.0, 2, 0), "1°0'0.00\"");
+    }
+
+    #[test]
+    fn dms_normal_values_unchanged() {
+        assert_eq!(format_dms(12.5, 2, 0), "12°30'0.00\"");
+        assert_eq!(format_dms(-0.5, 2, 0), "-0°30'0.00\"");
+        assert_eq!(format_dms(0.0, 2, 0), "0°0'0.00\"");
+        // Exact 1/8 arcsecond survives the tick quantization.
+        assert_eq!(format_dms(1.0 / 28800.0, 4, 0), "0°0'0.1250\"");
+    }
+
+    #[test]
+    fn dms_zero_degree_suppression() {
+        assert_eq!(format_dms(0.5, 2, 4), "30'0.00\"");
+        assert_eq!(format_dms(0.5, 2, 0), "0°30'0.00\"");
     }
 }
 

@@ -8,9 +8,9 @@
 // turned about an axis into a cone, a sphere or a torus — so the result can
 // be written back out as ACIS rather than as facets.
 //
-// A spline profile has no analytic side wall, so it is refused rather than
-// approximated into a surface nobody asked for. That is the kernel's answer
-// and this module passes it on.
+// An ellipse or spline profile has no analytic side wall, so it is cut to the
+// same angular tolerance the display uses and swept as chords: the wall is
+// planar strips, and the volume underneath reports the polygon it is.
 
 use acadrust::EntityType;
 use cadkernel::brep::{self, Body};
@@ -47,7 +47,9 @@ pub fn profile_of(entity: &EntityType) -> Option<Profile> {
         // both the fewest pieces a chain may have and the fewest that leave
         // each one unambiguous about which way round it goes.
         Curve::Circle(circle) => quarters(circle.centre, circle.radius),
-        _ => return None,
+        // An ellipse or a closed spline has no quarter to hand over, so it is
+        // sampled to the display tolerance and swept as chords.
+        _ => chords(&planar.curve)?,
     };
     (pieces.len() >= 3).then_some(Profile {
         plane: planar.plane,
@@ -70,6 +72,32 @@ fn quarters(centre: [f64; 2], radius: f64) -> Vec<Curve> {
             })
         })
         .collect()
+}
+
+/// A closed curve as a chain of straight pieces, cut so no chord turns more
+/// than the display tolerance allows.
+///
+/// The sampler hands back the ring with its first point repeated at the end;
+/// that repeat is dropped so the closing piece is a real span rather than a
+/// zero-length one.
+fn chords(curve: &Curve) -> Option<Vec<Curve>> {
+    use cadkernel::geom2d::Line;
+    let mut samples = curve.tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE);
+    let joined = samples.len() > 1 && {
+        let first = samples[0];
+        let last = samples[samples.len() - 1];
+        (first[0] - last[0]).hypot(first[1] - last[1]) <= 1e-9
+    };
+    if joined {
+        samples.pop();
+    }
+    let mut pieces: Vec<Curve> = samples
+        .windows(2)
+        .map(|pair| Curve::Line(Line { start: pair[0], end: pair[1] }))
+        .collect();
+    let (start, end) = (*samples.first()?, *samples.last()?);
+    pieces.push(Curve::Line(Line { start: end, end: start }));
+    Some(pieces)
 }
 
 /// EXTRUDE: drag the profile `height` along its own plane's normal.
@@ -108,22 +136,35 @@ use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 /// SWEEP through the kernel's tolerance-driven mesh API.
 pub fn swept(profile: &EntityType, path: &EntityType, color: [f32; 4]) -> Option<MeshLodSet> {
     let max_angle = cadkernel::tessellation::DEFAULT_ANGLE;
-    let surface =
-        brep::mesh::sweep_surface(&entity_curve(profile)?, &entity_curve(path)?, max_angle)?;
-    mesh_set(surface, color, 1e-9)
+    let profile = entity_curve(profile)?;
+    // The surface caps the section only when the profile closes, so the shell
+    // is whole only then — an open profile leaves a tube, which must not pass
+    // itself off as a solid to the editing code downstream.
+    let complete = profile.curve.is_closed();
+    let surface = brep::mesh::sweep_surface(&profile, &entity_curve(path)?, max_angle)?;
+    mesh_set(surface, color, 1e-9, complete)
 }
 
 /// LOFT through the kernel's tolerance-driven mesh API.
 pub fn lofted(profiles: &[EntityType], color: [f32; 4]) -> Option<MeshLodSet> {
     let curves: Vec<PlanarCurve> = profiles.iter().filter_map(entity_curve).collect();
+    // The loft closes and caps itself only when every profile closes — the
+    // kernel's own test, applied here so the set claims no more than it drew.
+    let complete = curves.iter().all(|curve| curve.curve.is_closed());
     let max_angle = cadkernel::tessellation::DEFAULT_ANGLE;
-    mesh_set(brep::mesh::loft_surface(&curves, max_angle)?, color, 1e-9)
+    mesh_set(
+        brep::mesh::loft_surface(&curves, max_angle)?,
+        color,
+        1e-9,
+        complete,
+    )
 }
 
 fn mesh_set(
     surface: brep::mesh::SurfaceMesh,
     color: [f32; 4],
     precision: f64,
+    complete: bool,
 ) -> Option<MeshLodSet> {
     if surface.mesh.is_empty() {
         return None;
@@ -168,6 +209,7 @@ fn mesh_set(
     }
     set.curved_gens
         .push(super::mesh_model::CurvedGen { source: silhouette });
+    set.complete = complete;
     Some(set)
 }
 
@@ -184,7 +226,7 @@ fn push_point(high: &mut Vec<[f32; 3]>, low: &mut Vec<[f32; 3]>, point: [f64; 3]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acadrust::entities::{Circle, LwPolyline, LwVertex};
+    use acadrust::entities::{Circle, Ellipse, LwPolyline, LwVertex, Spline};
     use acadrust::types::{Vector2, Vector3};
 
     fn square(size: f64) -> EntityType {
@@ -236,6 +278,40 @@ mod tests {
         let expected = std::f64::consts::PI * 100.0 * 10.0;
         let got = volume(&solid);
         assert!(got > 0.98 * expected, "{got} vs {expected}");
+    }
+
+    #[test]
+    fn an_ellipse_extrudes_into_a_prism() {
+        // Five across and three deep, four high. The chords of the
+        // tessellation cut inside the true outline, so the volume reads as
+        // the polygon it is — within a few percent of π·a·b·h.
+        let mut ellipse = Ellipse::new();
+        ellipse.major_axis = Vector3::new(5.0, 0.0, 0.0);
+        ellipse.minor_axis_ratio = 0.6;
+        let solid = extruded(&EntityType::Ellipse(ellipse), 4.0).expect("a prism");
+        let expected = std::f64::consts::PI * 5.0 * 3.0 * 4.0;
+        let got = volume(&solid);
+        assert!(got > 0.98 * expected, "{got} vs {expected}");
+        assert!(got <= expected * 1.000_001, "{got} vs {expected}");
+    }
+
+    #[test]
+    fn a_closed_spline_extrudes_into_a_solid() {
+        // The outline's area is whatever the interpolation made of the fit
+        // points, so the assertion is the one that carries the fix: a closed
+        // spline is a profile, not a refusal.
+        let mut spline = Spline::default();
+        spline.degree = 3;
+        spline.flags.closed = true;
+        spline.fit_points = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+            Vector3::new(10.0, 10.0, 0.0),
+            Vector3::new(0.0, 10.0, 0.0),
+        ];
+        spline.normal = Vector3::new(0.0, 0.0, 1.0);
+        let solid = extruded(&EntityType::Spline(spline), 2.0).expect("a solid");
+        assert!(volume(&solid) > 0.0);
     }
 
     #[test]

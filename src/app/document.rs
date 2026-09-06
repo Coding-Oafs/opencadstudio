@@ -526,7 +526,7 @@ impl DocumentTab {
             selection_tool_mode: false,
             spatial: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            point_cloud: Default::default(),
+            point_cloud: crate::app::point_cloud::PointCloudDataset::for_this_machine(),
             #[cfg(not(target_arch = "wasm32"))]
             spatial_project: None,
             #[cfg(not(target_arch = "wasm32"))]

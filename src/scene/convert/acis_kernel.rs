@@ -17,6 +17,46 @@ use crate::scene::model::mesh_model::{CurvedGen, MeshLodSet};
 
 const DEFAULT_FIT_TOLERANCE: f64 = 1e-6;
 
+fn place_body(document: &SatDocument, body: brep::Body) -> Option<brep::Body> {
+    let source = body.provenance.source()?;
+    let transform = body_transform(document, source.index() as usize).ok()?;
+    if let Some((matrix, translation, scale)) = transform {
+        let placement = brep::Placement {
+            x_axis: [scale * matrix[0], scale * matrix[1], scale * matrix[2]],
+            y_axis: [scale * matrix[3], scale * matrix[4], scale * matrix[5]],
+            z_axis: [scale * matrix[6], scale * matrix[7], scale * matrix[8]],
+            origin: translation,
+        };
+        brep::transform(&body, &placement)
+    } else {
+        Some(body)
+    }
+}
+
+/// Lift one file-backed ACIS entity into the editable kernel cache.
+///
+/// A DWG entity normally owns one ACIS body.  Multi-body payloads cannot be
+/// represented by the scene's handle -> Body map without changing command
+/// identity semantics, so they remain display-only and are diagnosed.  A
+/// lossy lift is also kept display-only: editing it could discard an analytic
+/// surface the kernel does not yet model.
+pub fn lift_editable_sat(document: &SatDocument, name: &str) -> Option<brep::Body> {
+    let (mut bodies, loss) = lift(document);
+    if !loss.is_empty() {
+        crate::perf_record!("[acis] entity {name}: not editable because lift was lossy: {loss:?}");
+        return None;
+    }
+    if bodies.len() != 1 {
+        crate::perf_record!(
+            "[acis] entity {name}: not editable because payload contains {} bodies",
+            bodies.len()
+        );
+        return None;
+    }
+    let body = place_body(document, bodies.pop()?)?;
+    Some(body)
+}
+
 /// Tessellate an ACIS document through the kernel.
 pub fn tessellate_sat(
     document: &SatDocument,
@@ -28,24 +68,27 @@ pub fn tessellate_sat(
 ) -> Option<MeshLodSet> {
     let (bodies, loss) = lift(document);
     if bodies.is_empty() {
+        crate::perf_record!("[acis] entity {name}: lift produced no bodies (loss: {loss:?})");
         return None;
     }
     let mut placed_bodies = Vec::with_capacity(bodies.len());
     for body in bodies {
         let source = body.provenance.source()?;
-        let transform = body_transform(document, source.index() as usize).ok()?;
-        let placement_scale = transform.map_or(1.0, |(_, _, scale)| scale.abs());
-        let placed = if let Some((matrix, translation, scale)) = transform {
-            let placement = brep::Placement {
-                x_axis: [scale * matrix[0], scale * matrix[1], scale * matrix[2]],
-                y_axis: [scale * matrix[3], scale * matrix[4], scale * matrix[5]],
-                z_axis: [scale * matrix[6], scale * matrix[7], scale * matrix[8]],
-                origin: translation,
-            };
-            brep::transform(&body, &placement)?
-        } else {
-            body
+        let transform = match body_transform(document, source.index() as usize) {
+            Ok(transform) => transform,
+            Err(()) => {
+                crate::perf_record!(
+                    "[acis] entity {name}: unreadable transform at record {}",
+                    source.index()
+                );
+                return None;
+            }
         };
+        let placement_scale = transform.map_or(1.0, |(_, _, scale)| scale.abs());
+        let placed = place_body(document, body).or_else(|| {
+            crate::perf_record!("[acis] entity {name}: placement transform failed");
+            None
+        })?;
         placed_bodies.push((placed, placement_scale));
     }
     let bodies = placed_bodies;
@@ -157,6 +200,12 @@ pub fn tessellate_sat(
         }
     }
     if indices.is_empty() {
+        // The body lifted but drew nothing, which on screen is the same as
+        // never arriving — so the log says which entity and how many of its
+        // faces never triangulated.
+        crate::perf_record!(
+            "[acis] entity {name}: tessellation produced no triangles (undrawn faces: {undrawn})"
+        );
         return None;
     }
 
@@ -246,5 +295,12 @@ mod tests {
         // which reads as a plausible position and is the wrong one.
         let moved = placed([0.0, 0.0, 0.0], quarter_turn());
         assert_eq!(moved, [10.0, 20.0, 30.0]);
+    }
+
+    #[test]
+    fn file_style_sat_box_lifts_into_an_editable_body() {
+        let sat = acadrust::primitives::build_box([5.0, 6.0, 7.0], 2.0, 4.0, 6.0);
+        let body = lift_editable_sat(&sat, "fixture").expect("lossless single-body lift");
+        assert!(!body.shells.is_empty());
     }
 }

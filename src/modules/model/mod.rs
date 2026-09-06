@@ -2,6 +2,8 @@
 //
 //   Model group  : create primitive solids (box, cylinder, cone, sphere, …)
 //                  as ACIS Solid3D entities via acadrust's primitive builders.
+//   Solids group : build solids from 2D profiles (EXTRUDE / REVOLVE / SWEEP /
+//                  LOFT, implemented in `modules::insert::solid3d_cmds`).
 //   Design group : combine solids with the kernel boolean operations
 //                  (union / subtract / intersect).
 
@@ -18,6 +20,12 @@ const CONE_ICON: &[u8] = include_bytes!("../../../assets/icons/cone3d.svg");
 const SPHERE_ICON: &[u8] = include_bytes!("../../../assets/icons/sphere3d.svg");
 const WEDGE_ICON: &[u8] = include_bytes!("../../../assets/icons/wedge3d.svg");
 const TORUS_ICON: &[u8] = include_bytes!("../../../assets/icons/torus3d.svg");
+// No dedicated profile-tool SVGs exist; each Solids tool reuses the closest
+// existing 3D icon rather than inventing binary assets.
+const EXTRUDE_ICON: &[u8] = include_bytes!("../../../assets/icons/solid.svg");
+const REVOLVE_ICON: &[u8] = include_bytes!("../../../assets/icons/torus3d.svg");
+const SWEEP_ICON: &[u8] = include_bytes!("../../../assets/icons/array_path.svg");
+const LOFT_ICON: &[u8] = include_bytes!("../../../assets/icons/wireframe.svg");
 const UNION_ICON: &[u8] = include_bytes!("../../../assets/icons/union.svg");
 const SUBTRACT_ICON: &[u8] = include_bytes!("../../../assets/icons/subtract.svg");
 const INTERSECT_ICON: &[u8] = include_bytes!("../../../assets/icons/intersect.svg");
@@ -60,6 +68,15 @@ impl CadModule for ModelModule {
                             ],
                             default: "WEDGE",
                         },
+                    ],
+                },
+                RibbonGroup {
+                    title: "Solids",
+                    tools: vec![
+                        RibbonItem::LargeTool(tool("EXTRUDE", "Extrude", EXTRUDE_ICON)),
+                        RibbonItem::LargeTool(tool("REVOLVE", "Revolve", REVOLVE_ICON)),
+                        RibbonItem::LargeTool(tool("SWEEP", "Sweep", SWEEP_ICON)),
+                        RibbonItem::LargeTool(tool("LOFT", "Loft", LOFT_ICON)),
                     ],
                 },
                 RibbonGroup {

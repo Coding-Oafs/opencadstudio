@@ -822,9 +822,15 @@ impl OpenCADStudio {
             "PICKADD" | "PICKDRAG" => {
                 use crate::command::ValuePromptCommand;
                 let (name, prompt) = if cmd == "PICKADD" {
-                    ("PICKADD", "PICKADD  1 = click adds to selection (default), 0 = click replaces  <Enter reports>:")
+                    (
+                        "PICKADD",
+                        "PICKADD  1 = click adds to selection (default), 0 = click replaces  <Enter reports>:",
+                    )
                 } else {
-                    ("PICKDRAG", "PICKDRAG  0 = press-drag lassoes (default), 1 = press-drag draws a rectangle  <Enter reports>:")
+                    (
+                        "PICKDRAG",
+                        "PICKDRAG  0 = press-drag lassoes (default), 1 = press-drag draws a rectangle  <Enter reports>:",
+                    )
                 };
                 let c = ValuePromptCommand::new(name, prompt);
                 self.command_line.push_info(&c.prompt());

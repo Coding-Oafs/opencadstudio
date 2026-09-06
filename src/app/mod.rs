@@ -1726,6 +1726,23 @@ pub enum ArrowKey {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeshImportKind {
+    Stl,
+    Step,
+    Iges,
+}
+
+impl MeshImportKind {
+    fn command(self) -> &'static str {
+        match self {
+            Self::Stl => "STLIN",
+            Self::Step => "STEPIN",
+            Self::Iges => "IGESIN",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     Tick(Instant),
@@ -3063,6 +3080,15 @@ pub enum Message {
         u64,
         std::path::PathBuf,
         Result<crate::scene::model::mesh_model::MeshModel, String>,
+    ),
+    /// STL/STEP/IGES faceted mesh import.
+    MeshImport(MeshImportKind),
+    MeshImportPath(MeshImportKind, Option<std::path::PathBuf>),
+    MeshImportFinished(
+        u64,
+        MeshImportKind,
+        std::path::PathBuf,
+        Result<acadrust::entities::mesh::Mesh, String>,
     ),
     // ── LAS/LAZ point clouds (native) ────────────────────────────────────
     #[cfg(not(target_arch = "wasm32"))]

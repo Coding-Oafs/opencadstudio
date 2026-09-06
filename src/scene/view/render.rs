@@ -204,6 +204,11 @@ pub struct ViewportData {
     /// into the render signature so the settle frame re-renders hatches once and
     /// the scene-render cache holds it. See [`Scene::navigating_lod`].
     pub(in crate::scene) skip_hatch: bool,
+    /// Interaction LOD for meshes: draw the prebuilt coarsest-LOD batch this
+    /// frame (built by `upload_mesh_batch` from each set's meshopt LODs —
+    /// geometry that previously existed but was never rendered). The resident
+    /// full-detail batch returns once the view settles.
+    pub(in crate::scene) mesh_nav: bool,
     /// True when this viewport must not paint a canvas of its own. A floating
     /// viewport on a paper layout sits ON the sheet: anything it painted first
     /// would cover the page it is supposed to be a window in.
@@ -462,8 +467,10 @@ impl shader::Primitive for Primitive {
             let skip = inner.render_sig != u64::MAX && sig == inner.render_sig;
             inner.render_sig = sig;
             inner.skip_geometry = skip;
-            // Interaction LOD: skip the hatch draw this frame while navigating.
+            // Interaction LOD: skip the hatch draw this frame while navigating,
+            // and swap the mesh base passes onto the coarse batch.
             inner.skip_hatch_frame = vp.skip_hatch;
+            inner.mesh_nav_frame = vp.mesh_nav;
             inner.skip_background = vp.skip_background;
             if skip {
                 if vp.show_viewcube {
@@ -1292,6 +1299,9 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
     // Interaction-LOD hatch suppression: differs the signature so the settle
     // frame (skip_hatch flips false) re-renders with hatches and re-caches.
     vp.skip_hatch.hash(&mut h);
+    // Same for the coarse mesh batch: the settle frame must re-render from
+    // the resident full-detail batch.
+    vp.mesh_nav.hash(&mut h);
     vp.skip_background.hash(&mut h);
     clip_w.hash(&mut h);
     clip_h.hash(&mut h);
@@ -3730,6 +3740,7 @@ impl Scene {
             // (hatched) frame once it settles. Only applied to the on-screen
             // Model / paper content — the paper *sheet* keeps its fills.
             skip_hatch: self.hatch_lod_enabled() && navigating,
+            mesh_nav: navigating,
             skip_background: !inst.paper_sheet && self.current_layout != "Model",
             geometry_epoch: self.geometry_epoch,
             camera_generation: self.camera_generation,

@@ -49,9 +49,10 @@ pub use e57_import::{import_e57, E57ImportProgress, E57ImportStage, E57ImportSta
 pub use edit::{EditStore, EditTransaction, PointPatch};
 pub use jobs::{JobCheckpoint, JobQueue, JobRecord, JobStatus, ProtectedOutput};
 pub use measurement::{
-    cloud_to_cloud, drape_path, point_to_plane, point_to_point, point_to_surface,
-    CloudDistanceStatistics, DrapeError, DrapedPath, PlaneMeasurement, SurfaceMeasurement,
-    SurfaceSampler, VectorMeasurement, MAX_DRAPED_PATH_POINTS,
+    cloud_to_cloud, drape_path, drape_path_with_policy, point_to_plane, point_to_point,
+    point_to_surface, CloudDistanceStatistics, DrapeError, DrapeOutsidePolicy, DrapedPath,
+    PlaneMeasurement, SurfaceMeasurement, SurfaceSampler, VectorMeasurement,
+    MAX_DRAPED_PATH_POINTS,
 };
 pub use processing::{
     select_full_density, visit_full_density, FullDensityProgress, ProcessingExtent,
@@ -372,8 +373,12 @@ pub fn sample(path: impl AsRef<Path>, options: SampleOptions) -> Result<PointSam
     let mut reader = Reader::from_path(path)?;
     let metadata = CloudMetadata::from_header(reader.header())?;
     let max_points = u64::try_from(options.max_points).unwrap_or(u64::MAX);
+    // An explicit stride stays exact while its retained count fits the cap.
+    // Beyond the cap the stride is widened so a bounded sample still spreads
+    // across the whole file — a truncated 1-in-N prefix would be spatially
+    // biased (LAS files are typically ordered along flight lines).
     let stride = match options.stride {
-        Some(n) if n >= 1 => n,
+        Some(n) if n >= 1 && metadata.point_count.div_ceil(n) <= max_points => n,
         _ => metadata.point_count.max(1).div_ceil(max_points).max(1),
     };
     // Reserve based on the stride-derived retained count, not the full source
@@ -1106,6 +1111,49 @@ mod tests {
             assert_eq!(11, sample.points[1].source_index);
             assert_eq!(Some(50_000.0), sample.points[0].gps_time);
         }
+    }
+
+    #[test]
+    fn explicit_stride_widens_when_capped_and_keeps_coverage() {
+        // A 1-in-N request larger than the cap must widen the stride to keep
+        // the bounded sample spread over the whole file — not stop at a
+        // spatially biased prefix — and report the effective stride used.
+        let directory = TestDirectory::new();
+        let path = directory.join("capped.las");
+        create_cloud(&path, 101);
+
+        // 1-in-2 of 101 points (~51) capped at 10 must spread as 1-in-11.
+        let widened = sample(
+            &path,
+            SampleOptions {
+                max_points: 10,
+                chunk_size: 7,
+                stride: Some(2),
+            },
+        )
+        .unwrap();
+        assert_eq!(11, widened.stride);
+        assert_eq!(10, widened.points.len());
+        assert_eq!(0, widened.points[0].source_index);
+        assert_eq!(11, widened.points[1].source_index);
+        // The sample reaches the end of the file (stride 11 from index 0
+        // over 101 points ends at 99) instead of stopping at index 18.
+        assert_eq!(99, widened.points.last().unwrap().source_index);
+
+        // A stride whose retained count fits the cap stays exact: 1-in-11 of
+        // 101 points is exactly the 10-point cap.
+        let exact = sample(
+            &path,
+            SampleOptions {
+                max_points: 10,
+                chunk_size: 7,
+                stride: Some(11),
+            },
+        )
+        .unwrap();
+        assert_eq!(11, exact.stride);
+        assert_eq!(10, exact.points.len());
+        assert_eq!(99, exact.points.last().unwrap().source_index);
     }
 
     #[test]

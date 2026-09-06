@@ -15,9 +15,7 @@ pub mod minsert;
 mod mview_block;
 mod open_obj;
 mod pc_attach;
-mod snap_underlays;
 pub(crate) mod solid3d_cmds;
-mod underlay_layers;
 pub(crate) mod wblock;
 mod xadjust;
 pub(crate) mod xattach;
@@ -46,7 +44,6 @@ impl CadModule for InsertModule {
                         RibbonItem::LargeTool(xattach::tool()),
                         RibbonItem::LargeTool(xclip::tool()),
                         RibbonItem::LargeTool(xadjust::tool()),
-                        RibbonItem::Tool(underlay_layers::tool()),
                         RibbonItem::Dropdown {
                             id: "FRAMES_DROPDOWN",
                             icon: IconKind::Svg(include_bytes!(
@@ -77,7 +74,11 @@ impl CadModule for InsertModule {
                             ],
                             default: "FRAMES1",
                         },
-                        RibbonItem::Tool(snap_underlays::tool()),
+                        // UOSNAP / UNDERLAYLAYERS stay off the ribbon until
+                        // underlay snapping and the underlay-layers dialog
+                        // actually exist; a visible button that only prints
+                        // "not yet implemented" is worse than no button. The
+                        // commands remain dispatchable from the command line.
                     ],
                 },
                 // ── Point Cloud ───────────────────────────────────────────────────

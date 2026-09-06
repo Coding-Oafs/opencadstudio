@@ -19,6 +19,10 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
 // Mirrors `PointStyle` on the CPU. Keep offsets in sync with StyleUniforms.
+// `elevation_range` stores the Z range as (midpoint, half-width); the
+// elevation mode re-bases each point's double-single Z onto that midpoint
+// before recombining, the same large-magnitude cancellation the XY
+// relative-to-eye path relies on.
 struct Style {
     color_mode: u32,
     point_size: f32,
@@ -74,6 +78,18 @@ fn normalize_range(value: f32, range: vec2<f32>) -> f32 {
     return clamp((value - range.x) / (range.y - range.x), 0.0, 1.0);
 }
 
+// Maps Z onto the gradient parameter. `rebased_z` is the point's
+// double-single Z already re-based onto `elevation_range.x` (the range
+// midpoint), so it is small and precisely representable; a non-positive
+// half-width is a degenerate range pinned to the middle of the gradient.
+fn elevation_parameter(rebased_z: f32) -> f32 {
+    let half = style.elevation_range.y;
+    if (!(half > 0.0)) {
+        return 0.5;
+    }
+    return clamp(rebased_z / half, 0.0, 1.0);
+}
+
 fn elevation_gradient(value: f32) -> vec4<f32> {
     let red = clamp(value * 1.5, 0.0, 1.0);
     let blue = clamp((1.0 - value) * 1.5, 0.0, 1.0);
@@ -119,12 +135,15 @@ fn section_outside(high_xy: vec2<f32>, low_xy: vec2<f32>) -> f32 {
 }
 
 fn point_color(classification: u32, intensity: f32, return_number: u32,
-               source_id: u32, rgb: vec3<f32>, elevation: f32, label: u32) -> vec4<f32> {
+               source_id: u32, rgb: vec3<f32>, has_rgb: bool, elevation: f32,
+               label: u32) -> vec4<f32> {
     if (style.color_mode == 0u) {
         return class_color(classification);
     } else if (style.color_mode == 1u) {
-        // A zero RGB triple marks points whose source has no color band.
-        if (rgb.r > 0.0 || rgb.g > 0.0 || rgb.b > 0.0) {
+        // Presence is an explicit instance flag: black is a real color, so a
+        // zero triple only falls back to the class tone when the source has
+        // no RGB band at all.
+        if (has_rgb) {
             return vec4<f32>(rgb, 1.0);
         }
         return class_color(classification);
@@ -132,7 +151,7 @@ fn point_color(classification: u32, intensity: f32, return_number: u32,
         let value = normalize_range(intensity, style.intensity_range);
         return vec4<f32>(value, value, value, 1.0);
     } else if (style.color_mode == 3u) {
-        return elevation_gradient(normalize_range(elevation, style.elevation_range));
+        return elevation_gradient(elevation_parameter(elevation));
     } else if (style.color_mode == 4u) {
         return categorical_hash(return_number);
     } else if (style.color_mode == 6u) {
@@ -163,16 +182,26 @@ fn point_color(classification: u32, intensity: f32, return_number: u32,
     var half_size_px = select(0.0, style.point_size * 0.5, visible);
     var output: VertexOut;
     output.local = local;
+    // Packed instance flags in `color_selected.w`: bit 0 = selected, bit 1 =
+    // the point carries an RGB band. Both are exact small integers in f32.
+    let flags = u32(point.color_selected.w + 0.5);
+    // Re-base Z onto the elevation-range midpoint before recombining the
+    // double-single split, mirroring the XY relative-to-eye recombination
+    // above: absolute f32 Z at state-plane scale steps in ~3 cm increments,
+    // which bands the elevation gradient.
+    let elevation = (point.position_high_size.z - style.elevation_range.x)
+        + point.position_low.z;
     var color = point_color(
         classification,
         point.attributes.x,
         u32(point.attributes.y),
         u32(point.attributes.z),
         point.color_selected.xyz,
-        point.position_high_size.z,
+        (flags & 2u) != 0u,
+        elevation,
         label,
     );
-    if (point.color_selected.w > 0.5) {
+    if ((flags & 1u) != 0u) {
         color = vec4<f32>(1.0, 0.82, 0.05, 1.0);
     }
     // Cross-section: collapse hidden points to a zero-size quad (no

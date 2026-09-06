@@ -1,8 +1,8 @@
 //! Extensible production classifier pipeline for full-density working sets.
 
 use crate::{
-    classify_by_rules, classify_ground, detect_noise, ClassifyResult, ClassifyRule, GroundOptions,
-    RasterSurface, SamplePoint, SurfaceSampler,
+    ClassifyResult, ClassifyRule, GroundOptions, RasterSurface, SamplePoint, SurfaceSampler,
+    classify_by_rules, classify_ground, detect_noise,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

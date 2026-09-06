@@ -22,17 +22,13 @@ use iced::{mouse, Point, Task};
 pub(super) fn background_task<T, F, M>(work: F, map: M) -> Task<Message>
 where
     T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
-    M: FnOnce(T) -> Message + Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    M: FnOnce(Result<T, String>) -> Message + Send + 'static,
 {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let (tx, rx) = iced::futures::channel::oneshot::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(work());
-        });
         Task::perform(
-            async move { rx.await.expect("background export worker dropped") },
+            async move { crate::sys::background::run(work).await.and_then(|result| result) },
             map,
         )
     }
@@ -1401,6 +1397,11 @@ impl OpenCADStudio {
         path: std::path::PathBuf,
     ) -> Task<Message> {
         let i = self.active_tab;
+        // Session-created solids may still live only in the kernel cache.
+        // Give them a persistent SAT payload before cloning the worker's
+        // export snapshot so the 3MF tessellator sees the same geometry as
+        // the viewport.
+        self.sync_solid_models_to_acis(i);
         let document = self.tabs[i].scene.document.clone();
         let handles: Vec<_> = self.tabs[i].scene.selected.iter().copied().collect();
         let worker_name = block_name.clone();
@@ -1453,10 +1454,13 @@ impl OpenCADStudio {
             .filter_map(|s| s.lods.first().cloned())
             .collect();
         let worker_path = path.clone();
+        // The file declares millimetres, so non-mm drawings must be scaled
+        // (see `build_step`); pass the drawing's INSUNITS through.
+        let insunits = self.tabs[i].scene.document.header.insertion_units;
         background_task(
             move || {
                 let mesh_refs: Vec<_> = meshes.iter().collect();
-                let text = crate::io::step::build_step(&mesh_refs)
+                let text = crate::io::step::build_step(&mesh_refs, insunits)
                     .ok_or_else(|| "no mesh data to export".to_string())?;
                 std::fs::write(&worker_path, text.as_bytes()).map_err(|e| e.to_string())
             },
@@ -1478,10 +1482,14 @@ impl OpenCADStudio {
         background_task(
             move || {
                 let stats = crate::io::three_mf::export_path(&document, &worker_path)?;
-                Ok(format!(
+                let mut report = format!(
                     "{} object(s), {} vertices, {} triangles, {} base material(s)",
                     stats.objects, stats.vertices, stats.triangles, stats.materials
-                ))
+                );
+                if stats.skipped > 0 {
+                    report.push_str(&format!(", skipped {} unsupported entities", stats.skipped));
+                }
+                Ok(report)
             },
             move |result| Message::ThreeMfExportFinished(path, result),
         )
@@ -1497,6 +1505,34 @@ impl OpenCADStudio {
                     .ok_or_else(|| "no usable geometry in file".to_string())
             },
             move |result| Message::ObjImportFinished(tab_id, path, result),
+        )
+    }
+
+    pub(super) fn on_mesh_import_path_some(
+        &mut self,
+        kind: crate::app::MeshImportKind,
+        path: std::path::PathBuf,
+    ) -> Task<Message> {
+        let tab_id = self.tabs[self.active_tab].id;
+        let worker_path = path.clone();
+        background_task(
+            move || {
+                let bytes = std::fs::read(&worker_path).map_err(|error| error.to_string())?;
+                match kind {
+                    crate::app::MeshImportKind::Stl => crate::io::stl::parse_stl(&bytes),
+                    crate::app::MeshImportKind::Step => {
+                        let text = std::str::from_utf8(&bytes)
+                            .map_err(|_| "STEP file is not valid UTF-8/ASCII".to_string())?;
+                        crate::io::step::parse_step(text)
+                    }
+                    crate::app::MeshImportKind::Iges => {
+                        let text = std::str::from_utf8(&bytes)
+                            .map_err(|_| "IGES file is not valid UTF-8/ASCII".to_string())?;
+                        crate::io::iges::parse_iges(text)
+                    }
+                }
+            },
+            move |result| Message::MeshImportFinished(tab_id, kind, path, result),
         )
     }
 
@@ -1767,7 +1803,7 @@ impl OpenCADStudio {
 
         Task::perform(
             async move {
-                let (result, refreshed_preview) = std::thread::spawn(move || {
+                let (result, refreshed_preview) = crate::sys::background::run(move || {
                     let mut refreshed_preview = None;
                     if let Some((wires, camera, bg_color, png, viewport)) = thumbnail {
                         let started = iced::time::Instant::now();
@@ -1793,13 +1829,8 @@ impl OpenCADStudio {
                     );
                     (result, refreshed_preview)
                 })
-                .join()
-                .unwrap_or_else(|_| {
-                    (
-                        Err(crate::io::SaveFailure::other("save worker panicked")),
-                        None,
-                    )
-                });
+                .await
+                .unwrap_or_else(|error| (Err(crate::io::SaveFailure::other(error)), None));
                 crate::app::SaveOutcome {
                     job_id,
                     tab_id,
@@ -4364,44 +4395,37 @@ impl OpenCADStudio {
 
     pub(super) fn on_plot_style_panel_apply(&mut self) -> Task<Message> {
         let aci = self.plotstyle_panel_aci as usize;
-        if let Some(table) = self.active_plot_style.as_mut() {
-            if let Some(entry) = table.aci_entries.get_mut(aci) {
-                // Parse color.
-                let color_str = self.ps_color_buf.trim();
-                if color_str.is_empty() {
-                    entry.color = None;
-                } else if color_str.starts_with('#') && color_str.len() == 7 {
-                    let r = u8::from_str_radix(&color_str[1..3], 16).unwrap_or(0);
-                    let g = u8::from_str_radix(&color_str[3..5], 16).unwrap_or(0);
-                    let b = u8::from_str_radix(&color_str[5..7], 16).unwrap_or(0);
-                    entry.color = Some([r, g, b]);
-                }
-                if let Ok(lw) = self.ps_lineweight_buf.trim().parse::<u8>() {
-                    entry.lineweight = lw;
-                }
-                if let Ok(sc) = self.ps_screening_buf.trim().parse::<u8>() {
-                    entry.screening = sc.min(100);
-                }
+        let color = match crate::io::plot_style::parse_color_override(&self.ps_color_buf) {
+            Ok(color) => color,
+            Err(error) => {
+                self.command_line.push_error(&error);
+                return Task::none();
             }
-        } else {
-            // No table loaded: create an identity table and apply.
-            let mut table = crate::io::plot_style::PlotStyleTable::identity("Custom.ctb");
-            if let Some(entry) = table.aci_entries.get_mut(aci) {
-                let color_str = self.ps_color_buf.trim();
-                if color_str.starts_with('#') && color_str.len() == 7 {
-                    let r = u8::from_str_radix(&color_str[1..3], 16).unwrap_or(0);
-                    let g = u8::from_str_radix(&color_str[3..5], 16).unwrap_or(0);
-                    let b = u8::from_str_radix(&color_str[5..7], 16).unwrap_or(0);
-                    entry.color = Some([r, g, b]);
-                }
-                if let Ok(lw) = self.ps_lineweight_buf.trim().parse::<u8>() {
-                    entry.lineweight = lw;
-                }
-                if let Ok(sc) = self.ps_screening_buf.trim().parse::<u8>() {
-                    entry.screening = sc.min(100);
-                }
+        };
+        let lineweight = match self.ps_lineweight_buf.trim().parse::<u8>() {
+            Ok(value) => value,
+            Err(_) => {
+                self.command_line.push_error("Lineweight must be an integer from 0 to 255.");
+                return Task::none();
             }
-            self.active_plot_style = Some(table);
+        };
+        let screening = match self.ps_screening_buf.trim().parse::<u8>() {
+            Ok(value) if value <= 100 => value,
+            _ => {
+                self.command_line.push_error("Screening must be an integer from 0 to 100.");
+                return Task::none();
+            }
+        };
+        let created = self.active_plot_style.is_none();
+        let table = self.active_plot_style.get_or_insert_with(|| {
+            crate::io::plot_style::PlotStyleTable::identity("Custom.ctb")
+        });
+        if let Some(entry) = table.aci_entries.get_mut(aci) {
+            entry.color = color;
+            entry.lineweight = lineweight;
+            entry.screening = screening;
+        }
+        if created {
             self.command_line
                 .push_output(crate::tf!("Created new CTB table, ACI {aci} updated.").as_ref());
         }

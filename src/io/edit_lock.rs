@@ -240,7 +240,20 @@ impl Drop for EditLease {
 }
 
 fn acquire_drawing_lock(path: &Path) -> Result<(Option<File>, Option<String>), EditLeaseError> {
-    let drawing = match OpenOptions::new().read(true).write(true).open(path) {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        // The editor keeps this handle for the duration of the tab. Sharing
+        // delete lets ReplaceFileW atomically swap a saved temp file over the
+        // same drawing while the tab still owns its edit lease.
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    }
+    let drawing = match options.open(path) {
         Ok(file) => file,
         Err(error) if error_is_lock_conflict(&error) => {
             return Err(EditLeaseError::Locked(format!(

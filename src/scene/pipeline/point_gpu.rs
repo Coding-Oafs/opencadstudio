@@ -10,6 +10,8 @@
 use crate::scene::model::point_cloud_model::{PointChunk, PointCloudModel};
 use iced::wgpu;
 use iced::wgpu::util::DeviceExt;
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
 
 /// Bytes per GPU point instance: two position vec4s (relative-to-eye high and
 /// low) plus one attribute vec4 and one color/flag vec4.
@@ -28,32 +30,53 @@ struct PointInstance {
     color_selected: [f32; 4],
 }
 
+fn point_instance(point: &crate::scene::PointCloudPoint, point_size: f32) -> PointInstance {
+    let (high, low) = split_f64(point.position);
+    // `color_selected.w` packs two small-integer flag bits: 1 = selected,
+    // 2 = the source carries an RGB band. RGB mode branches on the flag
+    // instead of a non-zero triple so genuinely black points keep their
+    // color rather than falling back to the class tone.
+    let flags = u32::from(point.selected) | (u32::from(point.color.is_some()) << 1);
+    PointInstance {
+        position_high: [high[0], high[1], high[2], point_size],
+        position_low: [low[0], low[1], low[2], point.classification as f32],
+        attributes: [
+            point.intensity as f32,
+            point.return_number as f32,
+            point.point_source_id as f32,
+            point.label as f32,
+        ],
+        color_selected: [
+            point.color.map_or(0.0, |color| color[0] as f32 / 65_535.0),
+            point.color.map_or(0.0, |color| color[1] as f32 / 65_535.0),
+            point.color.map_or(0.0, |color| color[2] as f32 / 65_535.0),
+            flags as f32,
+        ],
+    }
+}
+
+/// Points map 1:1 to instances, so the output order must stay deterministic:
+/// `par_iter` is indexed, and collecting an indexed parallel iterator
+/// preserves input order. wasm has no rayon dependency (point clouds are
+/// desktop-scale), so it keeps the serial loop.
 fn build_instances(
     points: &[crate::scene::PointCloudPoint],
     point_size: f32,
 ) -> Vec<PointInstance> {
-    points
-        .iter()
-        .map(|point| {
-            let (high, low) = split_f64(point.position);
-            PointInstance {
-                position_high: [high[0], high[1], high[2], point_size],
-                position_low: [low[0], low[1], low[2], point.classification as f32],
-                attributes: [
-                    point.intensity as f32,
-                    point.return_number as f32,
-                    point.point_source_id as f32,
-                    point.label as f32,
-                ],
-                color_selected: [
-                    point.color.map_or(0.0, |color| color[0] as f32 / 65_535.0),
-                    point.color.map_or(0.0, |color| color[1] as f32 / 65_535.0),
-                    point.color.map_or(0.0, |color| color[2] as f32 / 65_535.0),
-                    f32::from(point.selected),
-                ],
-            }
-        })
-        .collect()
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        points
+            .par_iter()
+            .map(|point| point_instance(point, point_size))
+            .collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        points
+            .iter()
+            .map(|point| point_instance(point, point_size))
+            .collect()
+    }
 }
 
 // ── Style uniform ──────────────────────────────────────────────────────────
@@ -68,6 +91,11 @@ struct StyleUniforms {
     _pad0: [u32; 2],
     intensity_range: [f32; 2],
     _pad1: [f32; 2],
+    /// Elevation gradient input as (midpoint, half-width) of the Z range,
+    /// computed in f64 before the cast: the shader re-bases each point's
+    /// double-single Z onto the midpoint, which keeps the recombination
+    /// precise at state-plane elevations where absolute f32 min/max would
+    /// quantize the gradient into bands.
     elevation_range: [f32; 2],
     _pad2: [f32; 2],
     // Cross-section band relative to `section_origin` (the segment midpoint):

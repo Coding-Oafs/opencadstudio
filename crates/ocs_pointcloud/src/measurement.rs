@@ -66,6 +66,19 @@ pub fn point_to_plane(
 
 pub trait SurfaceSampler {
     fn elevation_at(&self, x: f64, y: f64) -> Option<f64>;
+
+    /// Optional nearest-boundary sample for explicit clamp workflows.
+    fn clamped_elevation_at(&self, _x: f64, _y: f64) -> Option<f64> {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DrapeOutsidePolicy {
+    #[default]
+    Abort,
+    Skip,
+    Clamp,
 }
 
 /// Hard ceiling for one interactive drape operation. This prevents an
@@ -135,6 +148,24 @@ pub fn drape_path(
     vertical_offset: f64,
     surface: &impl SurfaceSampler,
 ) -> Result<DrapedPath, DrapeError> {
+    drape_path_with_policy(
+        points,
+        closed,
+        maximum_segment_length,
+        vertical_offset,
+        surface,
+        DrapeOutsidePolicy::Abort,
+    )
+}
+
+pub fn drape_path_with_policy(
+    points: &[[f64; 3]],
+    closed: bool,
+    maximum_segment_length: f64,
+    vertical_offset: f64,
+    surface: &impl SurfaceSampler,
+    outside_policy: DrapeOutsidePolicy,
+) -> Result<DrapedPath, DrapeError> {
     if points.len() < 2 {
         return Err(DrapeError::NotEnoughPoints);
     }
@@ -187,6 +218,11 @@ pub fn drape_path(
     let sample = |x: f64, y: f64, sample_index: usize| {
         surface
             .elevation_at(x, y)
+            .or_else(|| {
+                (outside_policy == DrapeOutsidePolicy::Clamp)
+                    .then(|| surface.clamped_elevation_at(x, y))
+                    .flatten()
+            })
             .map(|z| [x, y, z + vertical_offset])
             .ok_or(DrapeError::OutsideSurface {
                 sample_index,
@@ -363,6 +399,30 @@ mod tests {
         )
         .expect_err("point limit");
         assert!(matches!(error, DrapeError::TooManyPoints { .. }));
+    }
+
+    #[test]
+    fn clamp_policy_uses_the_surface_boundary_sampler() {
+        struct ClampPlane;
+        impl SurfaceSampler for ClampPlane {
+            fn elevation_at(&self, x: f64, y: f64) -> Option<f64> {
+                (x <= 1.0 && y == 0.0).then_some(x)
+            }
+
+            fn clamped_elevation_at(&self, _x: f64, _y: f64) -> Option<f64> {
+                Some(1.0)
+            }
+        }
+        let result = drape_path_with_policy(
+            &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+            false,
+            1.0,
+            0.25,
+            &ClampPlane,
+            DrapeOutsidePolicy::Clamp,
+        )
+        .unwrap();
+        assert_eq!([2.0, 0.0, 1.25], result.points[2]);
     }
 
     #[test]

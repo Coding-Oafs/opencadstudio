@@ -65,8 +65,10 @@ mod tests {
 
         ipv4_first(&mut addrs);
 
-        let families: Vec<&str> =
-            addrs.iter().map(|a| if a.is_ipv4() { "4" } else { "6" }).collect();
+        let families: Vec<&str> = addrs
+            .iter()
+            .map(|a| if a.is_ipv4() { "4" } else { "6" })
+            .collect();
         assert_eq!(families, vec!["4", "4", "6", "6", "6"]);
         assert_eq!(addrs[0].to_string(), "10.0.0.1:443");
         assert_eq!(addrs[4].to_string(), "[2001:db8::3]:443");

@@ -1,8 +1,7 @@
 // One-shot update check.
 //
-// `check_for_update()` runs on a background thread (joined inside an
-// async wrapper, mirroring how the rest of `crate::io` wraps blocking
-// work for iced's `Task::perform`). It hits the GitHub releases API and
+// `check_for_update()` awaits a background thread without blocking the async
+// executor. It hits the GitHub releases API and
 // returns `Some(UpdateInfo)` when a newer release is available, or
 // `None` when up to date / on network failure / on parse error.
 
@@ -30,8 +29,8 @@ pub struct UpdateInfo {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn check_for_update() -> Option<UpdateInfo> {
-    std::thread::spawn(fetch_latest_if_outdated)
-        .join()
+    crate::sys::background::run(fetch_latest_if_outdated)
+        .await
         .ok()
         .flatten()
 }
@@ -148,68 +147,31 @@ fn parse_iso8601_utc(s: &str) -> Option<u64> {
     )
 }
 
-/// Minimal extractor for a top-level string field in the releases JSON.
-/// Avoids pulling in `serde_json` for two fields. Handles standard JSON
-/// string escapes (`\"`, `\\`, `\n`, `\r`, `\t`, `\/`) which are all the
-/// GitHub release body uses in practice.
+/// Read a top-level string using the existing JSON dependency. This handles
+/// whitespace, nested fields, and Unicode surrogate pairs in release notes.
 #[cfg(not(target_arch = "wasm32"))]
 fn extract_string_field(body: &str, field: &str) -> Option<String> {
-    let key = format!("\"{}\":\"", field);
-    let start = body.find(&key)? + key.len();
-    // Walk to the closing unescaped `"`, JSON-unescaping as we go.
-    let mut out = String::new();
-    let bytes = body.as_bytes();
-    let mut i = start;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'"' {
-            return Some(out);
-        }
-        if b == b'\\' && i + 1 < bytes.len() {
-            match bytes[i + 1] {
-                b'"' => out.push('"'),
-                b'\\' => out.push('\\'),
-                b'/' => out.push('/'),
-                b'n' => out.push('\n'),
-                b'r' => out.push('\r'),
-                b't' => out.push('\t'),
-                b'u' => {
-                    // \uXXXX — decode 4 hex digits. Surrogate pairs (BMP only
-                    // for now) are uncommon in release notes; skip on parse
-                    // failure.
-                    if i + 5 < bytes.len() {
-                        let hex = std::str::from_utf8(&bytes[i + 2..i + 6]).ok()?;
-                        if let Ok(code) = u32::from_str_radix(hex, 16) {
-                            if let Some(c) = char::from_u32(code) {
-                                out.push(c);
-                            }
-                        }
-                        i += 6;
-                        continue;
-                    }
-                    return None;
-                }
-                other => {
-                    // Unknown escape — keep the literal pair, GitHub doesn't emit these.
-                    out.push('\\');
-                    out.push(other as char);
-                }
-            }
-            i += 2;
-            continue;
-        }
-        // UTF-8 multi-byte chars: push the whole code-point so we don't
-        // bisect a sequence.
-        let ch = body[i..].chars().next()?;
-        out.push(ch);
-        i += ch.len_utf8();
-    }
-    None
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    value.get(field)?.as_str().map(str::to_owned)
 }
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_json_supports_whitespace_unicode_and_top_level_fields() {
+        let body = r#"{ "author": {"tag_name":"wrong"}, "tag_name": "v2.1.1", "body": "CAD \ud83d\ude80\nReady" }"#;
+        assert_eq!(
+            extract_string_field(body, "tag_name").as_deref(),
+            Some("v2.1.1")
+        );
+        assert_eq!(
+            extract_string_field(body, "body").as_deref(),
+            Some("CAD 🚀\nReady")
+        );
+        assert_eq!(extract_string_field(r#"{"body":null}"#, "body"), None);
+        assert_eq!(extract_string_field(r#"{"body":"truncated"#, "body"), None);
+    }
 
     #[test]
     fn semantic_release_comparison_never_offers_a_downgrade() {

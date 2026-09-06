@@ -8,7 +8,7 @@
 
 use crate::{Error, ProtectedOutput, Result};
 use e57::{CartesianCoordinate, E57Reader};
-use las::{point::Format, Builder, Color, Point, Transform, Version, Writer};
+use las::{Builder, Color, Point, Transform, Version, Writer, point::Format};
 use std::{
     fs::File,
     io::BufReader,

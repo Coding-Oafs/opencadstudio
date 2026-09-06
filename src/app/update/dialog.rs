@@ -140,8 +140,10 @@ impl OpenCADStudio {
                 return task;
             }
             ModuleEvent::OpenFileDialog => {
-                self.command_line
-                    .push_info(crate::t!("Open DWG/DXF: not yet implemented.").as_ref());
+                // The Insert tab's "Open" large button used to print "not yet
+                // implemented" — the standard Open flow already existed
+                // behind the OPEN command, so route to it.
+                return Task::done(Message::OpenFile);
             }
             ModuleEvent::ClearModels => {
                 let i = self.active_tab;
@@ -1234,6 +1236,9 @@ mod tests {
     #[test]
     fn blockpalette_pin_toggles_autocollapse_and_close_hides() {
         let mut app = fresh();
+        // Tests load the user's persisted config; reset the dock to a known
+        // state so this stays hermetic (same as the dock-move test below).
+        app.dock = Default::default();
         app.show_block_palette = true;
         let id = crate::ui::dock::PanelId::BlockPalette;
         let _ = app.on_dock(crate::ui::dock::DockMsg::AutoCollapseToggle(id));

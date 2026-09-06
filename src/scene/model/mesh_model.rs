@@ -287,4 +287,121 @@ impl MeshLodSet {
                 .map(|mesh| mesh.color)
         })
     }
+
+    /// A document `Mesh` entity carrying this set's finest tessellation.
+    ///
+    /// SWEEP/LOFT and OBJ import produce display tessellations with no
+    /// analytic B-rep to register; converting them to a real Mesh entity —
+    /// instead of stashing the set in the volatile `scene.meshes` cache under
+    /// a placeholder solid — is what makes the geometry survive a save and
+    /// reopen. Rendering comes from the entity's own tessellation path in
+    /// `add_entity`, so callers must not also insert the set manually.
+    pub fn to_mesh_entity(&self, layer: &str) -> Option<acadrust::EntityType> {
+        let mesh = self
+            .geometry_lods()
+            .iter()
+            .find(|mesh| !mesh.indices.is_empty())?;
+        let has_low = mesh.verts_low.len() == mesh.verts.len();
+        let mut entity = acadrust::entities::mesh::Mesh::new();
+        entity.common.layer = layer.to_string();
+        let [r, g, b, _] = mesh.color;
+        entity.common.color = acadrust::types::Color::Rgb {
+            r: (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+            g: (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+            b: (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+        };
+        // Reattach the low residuals before storing: the document keeps f64
+        // vertices, and dropping the residual would displace survey-scale
+        // geometry by up to metres on reopen.
+        entity.vertices = mesh
+            .verts
+            .iter()
+            .enumerate()
+            .map(|(index, &[x, y, z])| {
+                let point = if has_low {
+                    let low = mesh.verts_low[index];
+                    [x + low[0], y + low[1], z + low[2]]
+                } else {
+                    [x, y, z]
+                };
+                acadrust::types::Vector3::new(
+                    point[0] as f64,
+                    point[1] as f64,
+                    point[2] as f64,
+                )
+            })
+            .collect();
+        entity.faces = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|triangle| {
+                acadrust::entities::mesh::MeshFace::triangle(
+                    triangle[0] as usize,
+                    triangle[1] as usize,
+                    triangle[2] as usize,
+                )
+            })
+            .collect();
+        if entity.faces.is_empty() {
+            None
+        } else {
+            Some(acadrust::EntityType::Mesh(entity))
+        }
+    }
+}
+
+#[cfg(test)]
+mod to_mesh_entity_tests {
+    use super::{MeshLodSet, MeshModel};
+
+    fn quad_model(with_low: bool) -> MeshModel {
+        // Two triangles at UTM-scale X, split as double-single.
+        let verts = vec![[500000.0f32, 0.0, 0.0], [500000.5, 0.0, 0.0], [500000.5, 1.0, 0.0], [500000.0, 1.0, 0.0]];
+        let verts_low = with_low
+            .then(|| vec![[0.03125f32, 0.0, 0.0], [0.03125, 0.0, 0.0], [0.03125, 0.0, 0.0], [0.03125, 0.0, 0.0]])
+            .unwrap_or_default();
+        MeshModel {
+            name: String::new(),
+            verts,
+            verts_low,
+            normals: Vec::new(),
+            indices: vec![0, 1, 2, 0, 2, 3],
+            triangle_material_handles: Vec::new(),
+            triangle_colors: Vec::new(),
+            color: [0.5, 0.25, 1.0, 1.0],
+            selected: false,
+        }
+    }
+
+    #[test]
+    fn converts_fine_st_lod_with_double_single_residuals() {
+        let set = MeshLodSet::from_single(quad_model(true));
+        let entity = set
+            .to_mesh_entity("Meshes")
+            .expect("a non-empty tessellation converts");
+        let acadrust::EntityType::Mesh(mesh) = entity else {
+            panic!("expected a Mesh entity");
+        };
+        assert_eq!(mesh.common.layer, "Meshes");
+        assert_eq!(4, mesh.vertices.len());
+        assert_eq!(2, mesh.faces.len());
+        // The f32 high half of 500000.x cannot represent the 0.03125
+        // residual; the entity must carry the reconstructed f64 value.
+        assert_eq!(500000.03125, mesh.vertices[0].x);
+        assert_eq!(500000.53125, mesh.vertices[1].x);
+        match mesh.common.color {
+            acadrust::types::Color::Rgb { r, g, b } => {
+                assert_eq!((128, 64, 255), (r, g, b));
+            }
+            other => panic!("expected RGB colour, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_geometry_does_not_convert() {
+        let mut model = quad_model(false);
+        model.indices.clear();
+        let set = MeshLodSet::from_single(model);
+        assert!(set.to_mesh_entity("0").is_none());
+    }
 }

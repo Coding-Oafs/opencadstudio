@@ -370,7 +370,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
             "ARC_CONT" => {
-                use crate::modules::draw::draw::arc::{continue_anchor, ArcContCommand};
+                use crate::modules::draw::draw::arc::{ArcContCommand, continue_anchor};
                 // Prefer the anchor recorded when the last line/arc was drawn (it
                 // knows the true drawing-end tangent); otherwise fall back to the
                 // last line/arc found in the document (e.g. after a file load).

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::{FindMatchKey, Message, OpenCADStudio};
 use crate::entities::traits::EntityTypeOps;
 use acadrust::EntityType;
@@ -116,10 +118,10 @@ impl OpenCADStudio {
         if self.tabs[i].scene.entity_belongs_to_active_space(handle) {
             self.invalidate_property_targets(i, &[handle]);
         } else {
-            // A block-definition edit must rebuild the definition cache; an
-            // entity-only delta would leave every visible INSERT showing the
-            // old text until some unrelated full rebuild.
-            self.tabs[i].scene.bump_geometry();
+            // A block-definition (or other-layout) hit: refresh the definition
+            // cache and every consuming INSERT without retessellating the
+            // whole document.
+            refresh_block_definition_edits(&mut self.tabs[i].scene, &[handle]);
         }
         self.tabs[i].dirty = true;
         self.find_replace.current_match = None;
@@ -148,7 +150,6 @@ impl OpenCADStudio {
         self.push_undo_snapshot(i, "FIND/REPLACE ALL");
         let mut replaced = 0usize;
         let mut changed = Vec::new();
-        let mut changed_outside_active_space = false;
         let editable: Vec<_> = matches
             .into_iter()
             .filter(|target| !match_is_locked(&self.tabs[i].scene, *target))
@@ -164,8 +165,6 @@ impl OpenCADStudio {
             if count > 0 {
                 replaced += count;
                 let handle = match_document_handle(target);
-                changed_outside_active_space |=
-                    !self.tabs[i].scene.entity_belongs_to_active_space(handle);
                 if !changed.contains(&handle) {
                     changed.push(handle);
                 }
@@ -177,8 +176,14 @@ impl OpenCADStudio {
             return;
         }
 
-        if changed_outside_active_space {
-            self.tabs[i].scene.bump_geometry();
+        let outside_active_space = changed
+            .iter()
+            .any(|&handle| !self.tabs[i].scene.entity_belongs_to_active_space(handle));
+        if outside_active_space {
+            // At least one hit lives in a block definition (or another
+            // layout): refresh definition caches and consuming INSERTs; the
+            // active-space hits ride along in the same per-handle delta.
+            refresh_block_definition_edits(&mut self.tabs[i].scene, &changed);
         } else {
             self.invalidate_property_targets(i, &changed);
         }
@@ -278,6 +283,100 @@ fn no_match_status(search: &str) -> String {
     } else {
         format!("\"{search}\" was not found.")
     }
+}
+
+/// Incremental rebuild after edits to entities that live in block definitions
+/// (Find/Replace hits, dynamic-block visibility flips). Names the changed
+/// handles plus every top-level INSERT whose block tree consumes them, so the
+/// per-handle journal patches just those wires — a full `bump_geometry` here
+/// retessellated the whole document. The block-definition cache is dropped by
+/// advancing `block_epoch`; the epoch `bump_entities` just stamped has never
+/// served as a block_epoch before, so no stale cache entry can survive it.
+pub(super) fn refresh_block_definition_edits(
+    scene: &mut crate::scene::Scene,
+    changed: &[acadrust::Handle],
+) {
+    let targets = owning_block_records(&scene.document, changed);
+    let mut changes: Vec<(acadrust::Handle, crate::scene::ChangeKind)> = changed
+        .iter()
+        .map(|&handle| (handle, crate::scene::ChangeKind::Modified))
+        .collect();
+    for entity in scene.document.entities() {
+        let EntityType::Insert(insert) = entity else {
+            continue;
+        };
+        // Only top-level references re-tessellate from the definition cache;
+        // a nested consumer refreshes through its root INSERT.
+        if !scene.entity_belongs_to_active_space(insert.common.handle) {
+            continue;
+        }
+        let mut visited = Vec::new();
+        if block_tree_contains(&scene.document, &insert.block_name, &targets, &mut visited) {
+            changes.push((insert.common.handle, crate::scene::ChangeKind::Modified));
+        }
+    }
+    scene.bump_entities(&changes);
+    scene.block_epoch = scene.geometry_epoch;
+}
+
+/// Block-record handles that directly own any of `changed`, falling back to
+/// the block_records membership lists when an entity's owner handle is null.
+fn owning_block_records(
+    document: &acadrust::CadDocument,
+    changed: &[acadrust::Handle],
+) -> HashSet<acadrust::Handle> {
+    let mut targets = HashSet::new();
+    for &handle in changed {
+        let owner = document
+            .get_entity(handle)
+            .map(|entity| entity.common().owner_handle)
+            .filter(|owner| !owner.is_null())
+            .unwrap_or_else(|| {
+                document
+                    .block_records
+                    .iter()
+                    .find(|record| record.entity_handles.contains(&handle))
+                    .map_or(acadrust::Handle::NULL, |record| record.handle)
+            });
+        if !owner.is_null() {
+            targets.insert(owner);
+        }
+    }
+    targets
+}
+
+/// True when the block named `block_name` — or any block nested inside it —
+/// is one of `targets` (by record handle). Cycle-safe via `visited`.
+fn block_tree_contains(
+    document: &acadrust::CadDocument,
+    block_name: &str,
+    targets: &HashSet<acadrust::Handle>,
+    visited: &mut Vec<String>,
+) -> bool {
+    if visited
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(block_name))
+    {
+        return false;
+    }
+    let Some(record) = document
+        .block_records
+        .iter()
+        .find(|record| record.name.eq_ignore_ascii_case(block_name))
+    else {
+        return false;
+    };
+    visited.push(record.name.clone());
+    let hit = targets.contains(&record.handle)
+        || record.entity_handles.iter().any(|&handle| {
+            matches!(
+                document.get_entity(handle),
+                Some(EntityType::Insert(insert))
+                    if block_tree_contains(document, &insert.block_name, targets, visited)
+            )
+        });
+    visited.pop();
+    hit
 }
 
 fn replace_entity_text(

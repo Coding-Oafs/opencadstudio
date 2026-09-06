@@ -23,6 +23,15 @@ pub struct ExtrudeCommand {
     step: ExtrudeStep,
     pub target_handle: acadrust::Handle,
     color: [f32; 4],
+    /// Working plane the height is measured against. Extrusion runs along
+    /// the profile plane's normal, so the picked height point must be read
+    /// in plane-local terms, not as a world coordinate.
+    plane: crate::command::WorkingPlane,
+    /// Plane-local height of the point where the profile was picked. The
+    /// height point is measured relative to this anchor, so a profile drawn
+    /// anywhere in the plane extrudes by the picked distance, not by its
+    /// distance from the world origin.
+    anchor_local_z: f64,
 }
 
 #[derive(PartialEq)]
@@ -32,11 +41,13 @@ enum ExtrudeStep {
 }
 
 impl ExtrudeCommand {
-    pub fn new(color: [f32; 4]) -> Self {
+    pub fn new(color: [f32; 4], plane: crate::command::WorkingPlane) -> Self {
         Self {
             step: ExtrudeStep::Pick,
             target_handle: acadrust::Handle::NULL,
             color,
+            plane,
+            anchor_local_z: 0.0,
         }
     }
 }
@@ -55,19 +66,25 @@ impl CadCommand for ExtrudeCommand {
     fn needs_entity_pick(&self) -> bool {
         self.step == ExtrudeStep::Pick
     }
-    fn on_entity_pick(&mut self, handle: acadrust::Handle, _pt: DVec3) -> CmdResult {
+    fn on_entity_pick(&mut self, handle: acadrust::Handle, pt: DVec3) -> CmdResult {
         if handle.is_null() {
             return CmdResult::NeedPoint;
         }
         self.target_handle = handle;
+        self.anchor_local_z = self.plane.to_local(pt).z;
         self.step = ExtrudeStep::Height;
         CmdResult::NeedPoint
     }
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         if self.step == ExtrudeStep::Height {
+            // Height is the plane-local distance from the profile pick to
+            // this point. The old `pt.y.abs()` measured the pick's world Y —
+            // a profile drawn at y=1000 extruded 1000 units tall no matter
+            // where the height point was picked.
+            let height = (self.plane.to_local(pt).z - self.anchor_local_z).abs();
             return CmdResult::ExtrudeEntity {
                 handle: self.target_handle,
-                height: pt.y.abs().max(1e-4),
+                height: height.max(1e-4),
                 color: self.color,
             };
         }

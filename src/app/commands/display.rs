@@ -547,17 +547,23 @@ impl OpenCADStudio {
             // profile into a solid of the given thickness, which is also an extrude.
             "EXTRUDE" | "PRESSPULL" | "THICKEN" => {
                 use crate::modules::insert::solid3d_cmds::ExtrudeCommand;
-                // If a single entity is already selected, skip the pick step.
+                let working_plane = if self.tabs[i].editing_model_space() {
+                    self.tabs[i].ucs_xform().working_plane()
+                } else {
+                    crate::command::WorkingPlane::default()
+                };
+                // If a single entity is already selected, skip the pick step;
+                // the height is then measured from the working plane itself.
                 let selected: Vec<_> = self.tabs[i].scene.selected_entities().into_iter().collect();
                 let color = self.tabs[i].scene.layer_color(&self.tabs[i].active_layer);
                 if selected.len() == 1 {
                     let handle = selected[0].0;
-                    let mut cmd = ExtrudeCommand::new(color);
-                    cmd.on_entity_pick(handle, glam::DVec3::ZERO);
+                    let mut cmd = ExtrudeCommand::new(color, working_plane);
+                    cmd.on_entity_pick(handle, working_plane.origin);
                     self.command_line.push_info(&cmd.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(cmd));
                 } else {
-                    let cmd = ExtrudeCommand::new(color);
+                    let cmd = ExtrudeCommand::new(color, working_plane);
                     self.command_line.push_info(&cmd.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(cmd));
                 }
@@ -593,6 +599,22 @@ impl OpenCADStudio {
             // ── OBJ import ───────────────────────────────────────────────
             "IMPORTOBJ" | "OBJIMPORT" => {
                 return Some(Task::done(Message::ObjImport));
+            }
+
+            "STLIN" | "IMPORTSTL" => {
+                return Some(Task::done(Message::MeshImport(
+                    crate::app::MeshImportKind::Stl,
+                )));
+            }
+            "STEPIN" | "IMPORTSTEP" | "STPIN" => {
+                return Some(Task::done(Message::MeshImport(
+                    crate::app::MeshImportKind::Step,
+                )));
+            }
+            "IGESIN" | "IGSIN" | "IMPORTIGES" => {
+                return Some(Task::done(Message::MeshImport(
+                    crate::app::MeshImportKind::Iges,
+                )));
             }
 
             // ── STL export ────────────────────────────────────────────────
@@ -1486,20 +1508,29 @@ impl OpenCADStudio {
             cmd if cmd == "POINTCLOUDDRAPE" || cmd.starts_with("POINTCLOUDDRAPE ") => {
                 let arguments = cmd.trim_start_matches("POINTCLOUDDRAPE").trim();
                 let fields: Vec<_> = arguments.split_whitespace().collect();
-                if fields.len() > 2 {
+                if fields.len() > 3 {
                     self.command_line
-                        .push_error("Usage: POINTCLOUDDRAPE [positive-spacing] [vertical-offset]");
+                        .push_error("Usage: POINTCLOUDDRAPE [positive-spacing] [vertical-offset] [ABORT|SKIP|CLAMP]");
                     return Some(Task::none());
                 }
                 let spacing = fields.first().map_or(Ok(1.0), |value| value.parse::<f64>());
                 let vertical_offset = fields.get(1).map_or(Ok(0.0), |value| value.parse::<f64>());
-                match (spacing, vertical_offset) {
-                    (Ok(spacing), Ok(vertical_offset)) => {
-                        self.drape_selected_to_point_cloud(i, spacing, vertical_offset);
+                let outside_policy = fields.get(2).map_or(
+                    Some(ocs_pointcloud::DrapeOutsidePolicy::Abort),
+                    |value| match value.to_ascii_uppercase().as_str() {
+                        "ABORT" => Some(ocs_pointcloud::DrapeOutsidePolicy::Abort),
+                        "SKIP" => Some(ocs_pointcloud::DrapeOutsidePolicy::Skip),
+                        "CLAMP" => Some(ocs_pointcloud::DrapeOutsidePolicy::Clamp),
+                        _ => None,
+                    },
+                );
+                match (spacing, vertical_offset, outside_policy) {
+                    (Ok(spacing), Ok(vertical_offset), Some(outside_policy)) => {
+                        self.drape_selected_to_point_cloud(i, spacing, vertical_offset, outside_policy);
                     }
                     _ => self
                         .command_line
-                        .push_error("Usage: POINTCLOUDDRAPE [positive-spacing] [vertical-offset]"),
+                        .push_error("Usage: POINTCLOUDDRAPE [positive-spacing] [vertical-offset] [ABORT|SKIP|CLAMP]"),
                 }
             }
 
@@ -1880,7 +1911,7 @@ impl OpenCADStudio {
                     .parse::<u16>()
                 {
                     Ok(code) if code > 0 => {
-                        return Some(Task::done(Message::PointCloudReproject(code)))
+                        return Some(Task::done(Message::PointCloudReproject(code)));
                     }
                     _ => self
                         .command_line
@@ -2663,6 +2694,26 @@ impl OpenCADStudio {
             #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDDETACH" => {
                 self.detach_point_cloud(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDBUDGET" => {
+                self.command_line.push_info(
+                    format!(
+                        "POINTCLOUDBUDGET: {}. Usage: POINTCLOUDBUDGET <AUTO|LOW|MEDIUM|HIGH> or POINTCLOUDBUDGET POINTS <n> GPU <mib> CPU <mib>",
+                        crate::sys::resources::budget_summary()
+                    )
+                    .as_str(),
+                );
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDBUDGET ") => {
+                let arg = cmd
+                    .trim_start_matches("POINTCLOUDBUDGET")
+                    .trim()
+                    .to_string();
+                self.set_point_cloud_budget(&arg);
             }
 
             #[cfg(not(target_arch = "wasm32"))]

@@ -1954,14 +1954,22 @@ impl OpenCADStudio {
             #[cfg(not(target_arch = "wasm32"))]
             Message::ThreeMfExport => {
                 let i = self.active_tab;
-                let has_meshes = self.tabs[i]
-                    .scene
-                    .document
-                    .entities()
-                    .any(|entity| matches!(entity, acadrust::EntityType::Mesh(_)));
+                let has_meshes = self.tabs[i].scene.document.entities().any(|entity| {
+                    matches!(
+                        entity,
+                        acadrust::EntityType::Mesh(_)
+                            | acadrust::EntityType::PolygonMesh(_)
+                            | acadrust::EntityType::PolyfaceMesh(_)
+                            | acadrust::EntityType::Solid3D(_)
+                            | acadrust::EntityType::Region(_)
+                            | acadrust::EntityType::Body(_)
+                            | acadrust::EntityType::Surface(_)
+                            | acadrust::EntityType::Insert(_)
+                    )
+                });
                 if !has_meshes {
                     self.command_line.push_error(
-                        crate::t!("EXPORT3MF: no MESH entities in this drawing.").as_ref(),
+                        "EXPORT3MF: no supported 3D mesh, solid, or block-instance geometry in this drawing.",
                     );
                     return Task::none();
                 }
@@ -2041,16 +2049,105 @@ impl OpenCADStudio {
                             .unwrap_or_else(|| "obj_mesh".into());
                         mesh.name = file_stem.clone();
                         self.push_undo_snapshot(i, "IMPORTOBJ");
-                        let entity = crate::modules::insert::solid3d_cmds::empty_solid3d();
-                        let handle = self.tabs[i].scene.add_entity(entity);
-                        if !handle.is_null() {
-                            self.tabs[i]
-                                .scene
-                                .meshes
-                                .insert(handle, crate::scene::MeshLodSet::from_single(mesh));
+                        // Persist as a real Mesh entity: the old placeholder
+                        // Solid3D lived only in the volatile scene cache, so
+                        // the import vanished on the next cache rebuild and
+                        // never saved. `add_entity` tessellates the entity
+                        // for rendering itself.
+                        let layer = self.tabs[i].active_layer.clone();
+                        let set = crate::scene::MeshLodSet::from_single(mesh);
+                        match set.to_mesh_entity(&layer) {
+                            Some(entity) => {
+                                let handle = self.tabs[i].scene.add_entity(entity);
+                                if !handle.is_null() {
+                                    self.tabs[i].dirty = true;
+                                    self.command_line.push_output(
+                                        crate::tf!("IMPORTOBJ: imported \"{file_stem}\" as mesh.")
+                                            .as_ref(),
+                                    );
+                                }
+                            }
+                            None => self.command_line.push_error(
+                                crate::t!("IMPORTOBJ: file contains no triangles.").as_ref(),
+                            ),
+                        }
+                    }
+                }
+                Task::none()
+            }
+
+            Message::MeshImport(kind) => {
+                let (title, label, extensions): (&str, &str, &[&str]) = match kind {
+                    crate::app::MeshImportKind::Stl => {
+                        ("Import STL Mesh", "STL Models", &["stl", "STL"])
+                    }
+                    crate::app::MeshImportKind::Step => (
+                        "Import STEP Mesh",
+                        "STEP Models",
+                        &["step", "stp", "STEP", "STP"],
+                    ),
+                    crate::app::MeshImportKind::Iges => (
+                        "Import IGES Mesh",
+                        "IGES Models",
+                        &["iges", "igs", "IGES", "IGS"],
+                    ),
+                };
+                Task::perform(
+                    async move {
+                        crate::sys::file_dialog()
+                            .set_title(title)
+                            .add_filter(label, extensions)
+                            .add_filter("All Files", &["*"])
+                            .pick_file()
+                            .await
+                            .map(|handle| crate::sys::handle_path(&handle))
+                    },
+                    move |path| Message::MeshImportPath(kind, path),
+                )
+            }
+
+            Message::MeshImportPath(kind, Some(path)) => self.on_mesh_import_path_some(kind, path),
+
+            Message::MeshImportPath(_, None) => Task::none(),
+
+            Message::MeshImportFinished(tab_id, kind, path, result) => {
+                let command = kind.command();
+                match result {
+                    Err(error) => self
+                        .command_line
+                        .push_error(format!("{command}: {error}").as_str()),
+                    Ok(mut mesh) => {
+                        let Some(i) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+                            self.command_line.push_info(
+                                format!("{command}: target drawing was closed.").as_str(),
+                            );
+                            return Task::none();
+                        };
+                        let file_stem = path
+                            .file_stem()
+                            .map(|stem| stem.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "imported_mesh".to_string());
+                        mesh.common.layer = self.tabs[i].active_layer.clone();
+                        mesh.common.handle = acadrust::Handle::NULL;
+                        let vertices = mesh.vertices.len();
+                        let triangles = mesh.faces.len();
+                        self.push_undo_snapshot(i, command);
+                        let handle = self.tabs[i]
+                            .scene
+                            .add_entity(acadrust::EntityType::Mesh(mesh));
+                        if handle.is_null() {
+                            self.command_line.push_error(
+                                format!("{command}: imported mesh could not be added.").as_str(),
+                            );
+                        } else {
                             self.tabs[i].dirty = true;
+                            self.tabs[i].scene.deselect_all();
+                            self.tabs[i].scene.select_entity(handle, false);
                             self.command_line.push_output(
-                                crate::tf!("IMPORTOBJ: imported \"{file_stem}\" as mesh.").as_ref(),
+                                format!(
+                                    "{command}: imported \"{file_stem}\" as a persistent mesh ({vertices} vertices, {triangles} triangles)."
+                                )
+                                .as_str(),
                             );
                         }
                     }

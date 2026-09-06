@@ -1,8 +1,8 @@
 //! Versioned SQLite sidecar for attachment metadata, sparse edits and audit.
 
 use crate::{ClassTable, DisplaySettings, EditStore, PointFilter, SelectionSet};
-use rusqlite::{params, Connection, OptionalExtension};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     error, fmt,
@@ -30,7 +30,10 @@ impl fmt::Display for SidecarError {
             Self::Io(error) => write!(f, "point-cloud sidecar I/O error: {error}"),
             Self::Json(error) => write!(f, "point-cloud sidecar data error: {error}"),
             Self::UnsupportedSchema(version) => {
-                write!(f, "point-cloud sidecar schema {version} is newer than supported schema {SCHEMA_VERSION}")
+                write!(
+                    f,
+                    "point-cloud sidecar schema {version} is newer than supported schema {SCHEMA_VERSION}"
+                )
             }
         }
     }
@@ -796,10 +799,12 @@ mod tests {
         };
         {
             let store = SidecarStore::open(&sidecar).expect("open");
-            assert!(store
-                .load_drawing_settings::<TestDrawingSettings>()
-                .expect("empty load")
-                .is_none());
+            assert!(
+                store
+                    .load_drawing_settings::<TestDrawingSettings>()
+                    .expect("empty load")
+                    .is_none()
+            );
             store
                 .save_drawing_settings(&expected)
                 .expect("save drawing settings");
@@ -993,10 +998,12 @@ mod tests {
             1,
             "legacy audit history must survive the migration"
         );
-        assert!(store
-            .load_drawing_settings::<TestDrawingSettings>()
-            .expect("empty drawing settings after migration")
-            .is_none());
+        assert!(
+            store
+                .load_drawing_settings::<TestDrawingSettings>()
+                .expect("empty drawing settings after migration")
+                .is_none()
+        );
         // The migrated store accepts new multi-source writes.
         let extra = state("added", "added", &drawing);
         store

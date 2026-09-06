@@ -6,6 +6,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod edit_lock;
 pub mod file_association;
+pub mod iges;
 pub mod linetypes;
 pub mod obj;
 pub mod paper_sizes;
@@ -1360,6 +1361,28 @@ fn windows_replace_error_is_file_in_use(raw_os_error: Option<i32>) -> bool {
 mod save_failure_tests {
     use super::{save_as_version, windows_replace_error_is_file_in_use};
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn locked_destination_preserves_original_and_allows_retry() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "ocs_locked_save_{}_{}.dxf", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::write(&path, b"original drawing").unwrap();
+        let held = std::fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+        let result = super::save_owned_as_version_atomic(
+            acadrust::CadDocument::new(), &path, acadrust::DxfVersion::AC1032,
+            false, None, None,
+        );
+        assert!(result.unwrap_err().file_in_use);
+        assert_eq!(std::fs::read(&path).unwrap(), b"original drawing");
+        drop(held);
+        save_as_version(&acadrust::CadDocument::new(), &path, acadrust::DxfVersion::AC1032).unwrap();
+        assert_ne!(std::fs::read(&path).unwrap(), b"original drawing");
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn issue_498_recognizes_windows_file_sharing_errors() {
         assert!(windows_replace_error_is_file_in_use(Some(32)));
@@ -1663,42 +1686,29 @@ fn replace_save_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     let replaced: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let replacement: Vec<u16> = temp_path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let ok = unsafe {
-        windows_sys::Win32::Storage::FileSystem::ReplaceFileW(
-            replaced.as_ptr(),
-            replacement.as_ptr(),
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            std::ptr::null(),
-        )
-    };
-    if ok != 0 {
-        return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
-    // ReplaceFileW can intermittently fail with ERROR_UNABLE_TO_REMOVE_REPLACED
-    // (1175) when the destination cannot be swapped atomically — e.g. a
-    // transient lock from antivirus/indexing, or a filesystem that does not
-    // support the underlying rename semantics. Retry as an explicit
-    // remove-then-rename: the replacement file is already fully written, so
-    // this is still non-truncating, just not atomic. Most frequent for the
-    // fixed-name `.sv$` autosave file, which is rewritten every SAVETIME tick.
-    if !matches!(error.raw_os_error(), Some(1175)) {
-        return Err(error);
-    }
-    // The lock is often gone within a few hundred milliseconds (indexer / AV).
-    // A bounded retry avoids dropping a completed save on a transient hold.
-    for _ in 0..5 {
-        match std::fs::remove_file(path) {
-            Ok(()) => return std::fs::rename(temp_path, path),
-            Err(remove_error) if remove_error.raw_os_error() == Some(1175) => {
-                std::thread::sleep(std::time::Duration::from_millis(120));
-            }
-            Err(remove_error) => return Err(remove_error),
+    // Retry the replacement itself. Removing the destination first can lose
+    // the last good drawing if the subsequent rename fails (or we crash).
+    for attempt in 0..6 {
+        let ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::ReplaceFileW(
+                replaced.as_ptr(),
+                replacement.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        if ok != 0 {
+            return Ok(());
         }
+        let error = std::io::Error::last_os_error();
+        if attempt == 5 || !matches!(error.raw_os_error(), Some(32 | 33 | 1175)) {
+            return Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(120));
     }
-    Err(error)
+    unreachable!("the final replacement attempt always returns")
 }
 
 /// Save using the document's existing version.

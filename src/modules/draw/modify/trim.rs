@@ -2186,6 +2186,19 @@ impl TrimCommand {
         }
     }
 
+    /// Handle → entity through the command's quadtree index. NULL keeps the
+    /// `iter().find` semantics (first NULL placeholder wins) because the index
+    /// maps only the last of several NULL handles.
+    fn entity_by_handle(&self, handle: Handle) -> Option<&EntityType> {
+        if handle.is_null() {
+            return self
+                .all_entities
+                .iter()
+                .find(|e| e.common().handle == handle);
+        }
+        self.entity_index.get(&self.all_entities, handle)
+    }
+
     /// Boundary geometry from the edge selection (or everything when none),
     /// with the Edge option's implied extrapolation applied on top.
     fn rebuild_geos(&mut self) {
@@ -2469,19 +2482,13 @@ impl CadCommand for TrimCommand {
                 let mut out: Vec<WireModel> = self
                     .edge_set
                     .iter()
-                    .filter_map(|h| {
-                        self.all_entities.iter().find(|e| e.common().handle == *h)
-                    })
+                    .filter_map(|h| self.entity_by_handle(*h))
                     .map(|e| {
                         WireModel::solid("edge_sel".into(), entity_pts(e), OPT_YELLOW, false)
                     })
                     .collect();
                 if !handle.is_null() && !self.edge_set.contains(&handle) {
-                    if let Some(e) = self
-                        .all_entities
-                        .iter()
-                        .find(|e| e.common().handle == handle)
-                    {
+                    if let Some(e) = self.entity_by_handle(handle) {
                         let mut c = OPT_YELLOW;
                         c[3] = 0.45;
                         out.push(WireModel::solid(
@@ -2496,11 +2503,7 @@ impl CadCommand for TrimCommand {
             }
             TrimMode::Erase => {
                 // Erase mode: the hovered object previews fully red.
-                if let Some(e) = self
-                    .all_entities
-                    .iter()
-                    .find(|e| e.common().handle == handle)
-                {
+                if let Some(e) = self.entity_by_handle(handle) {
                     return vec![WireModel::solid(
                         "erase_prev".into(),
                         entity_pts(e),
@@ -2518,11 +2521,7 @@ impl CadCommand for TrimCommand {
             if let Some(ext) =
                 pick_extend_at(&self.all_entities, &self.geos, handle, pt.x, pt.y)
             {
-                if let Some(orig) = self
-                    .all_entities
-                    .iter()
-                    .find(|e| e.common().handle == handle)
-                {
+                if let Some(orig) = self.entity_by_handle(handle) {
                     return extend_hover_wires(
                         orig,
                         &ext,
@@ -2546,8 +2545,7 @@ impl CadCommand for TrimCommand {
 
         let nearby_geos = self.nearby_geos(handle);
         let geos = nearby_geos.as_slice();
-        let entity = self
-            .entity_index.get(&self.all_entities, handle);
+        let entity = self.entity_by_handle(handle);
 
         let mut hover_wires = match entity {
             Some(EntityType::Line(l)) => {

@@ -265,6 +265,14 @@ pub struct Pipeline {
     /// touched by an edit are disabled wholesale and their current handles are
     /// repacked here, keeping the rest of a multi-million-triangle scene resident.
     gpu_mesh_dynamic: Vec<mesh_gpu::MeshBatchChunk>,
+    /// Coarsest-LOD copy of the resident batch, built alongside it and swapped
+    /// in while the camera moves (`mesh_nav_frame`) so orbiting a large model
+    /// streams a fraction of the triangles. Empty when no set generated LODs,
+    /// in which case navigation keeps drawing the full-detail batch.
+    gpu_mesh_nav_batch: Vec<mesh_gpu::MeshBatchChunk>,
+    /// Per-frame flag from the viewport: the camera moved recently. Selects
+    /// `gpu_mesh_nav_batch` for this frame's base mesh passes.
+    pub(in crate::scene) mesh_nav_frame: bool,
     mesh_disabled_chunks: rustc_hash::FxHashSet<usize>,
     mesh_dynamic_handles: rustc_hash::FxHashSet<acadrust::Handle>,
     /// Wire content generation whose geometry the static+dynamic mesh state
@@ -494,6 +502,7 @@ impl Pipeline {
         // ── Wire pipeline ──────────────────────────────────────────────────
         // Select the renderer tier from device limits.
         let device_caps = DeviceCapabilities::detect(device);
+        crate::sys::resources::record_gpu_limits(device.limits().max_buffer_size);
         #[cfg(not(target_arch = "wasm32"))]
         let force_compat_renderer = crate::cli::gui_config().compat_renderer;
         #[cfg(target_arch = "wasm32")]
@@ -2223,6 +2232,8 @@ impl Pipeline {
             gpu_images: vec![],
             gpu_mesh_batch: vec![],
             gpu_mesh_dynamic: vec![],
+            gpu_mesh_nav_batch: vec![],
+            mesh_nav_frame: false,
             mesh_disabled_chunks: rustc_hash::FxHashSet::default(),
             mesh_dynamic_handles: rustc_hash::FxHashSet::default(),
             cached_mesh_content_id: u64::MAX,
@@ -3013,6 +3024,31 @@ impl Pipeline {
             &mut chunks,
         );
         let materials_at = iced::time::Instant::now();
+        // Coarse twin for interaction LOD: same sets at their coarsest
+        // generated LOD. Only built when any set actually has one (the
+        // `Coarsest` pick otherwise yields the identical LOD0 geometry, and
+        // an empty batch would double memory for nothing).
+        let any_coarse = meshes
+            .iter()
+            .any(|set| set.geometry_lods().iter().filter(|m| !m.indices.is_empty()).count() > 1);
+        if any_coarse {
+            let (mut nav_chunks, _) = mesh_gpu::build_mesh_batch_filtered(
+                device,
+                queue,
+                meshes,
+                None,
+                mesh_gpu::LodPick::Coarsest,
+            );
+            mesh_gpu::upload_chunk_material_bind_groups(
+                device,
+                queue,
+                &self.mesh_material_bgl,
+                &mut nav_chunks,
+            );
+            self.gpu_mesh_nav_batch = nav_chunks;
+        } else {
+            self.gpu_mesh_nav_batch.clear();
+        }
         self.mesh_ranges_by_handle.clear();
         for (chunk_index, chunk) in chunks.iter().enumerate() {
             for range in &chunk.highlight_ranges {
@@ -3158,6 +3194,7 @@ impl Pipeline {
             queue,
             meshes,
             Some(&self.mesh_dynamic_handles),
+            mesh_gpu::LodPick::Finest,
         );
         mesh_gpu::upload_chunk_material_bind_groups(
             device,
@@ -3211,10 +3248,22 @@ impl Pipeline {
         &self,
     ) -> impl Iterator<Item = (usize, &mesh_gpu::MeshBatchChunk)> {
         let dynamic_offset = self.gpu_mesh_batch.len();
-        self.gpu_mesh_batch
-            .iter()
+        // Interaction LOD: while the camera moves, the base passes draw the
+        // coarse twin batch. Highlights and the dynamic edit set keep their
+        // own full-detail buffers, so nothing that indexes chunks by handle
+        // is affected.
+        let base = if self.mesh_nav_frame && !self.gpu_mesh_nav_batch.is_empty() {
+            None::<&Vec<mesh_gpu::MeshBatchChunk>>
+        } else {
+            Some(&self.gpu_mesh_batch)
+        };
+        let nav = (self.mesh_nav_frame && !self.gpu_mesh_nav_batch.is_empty())
+            .then_some(&self.gpu_mesh_nav_batch);
+        base.into_iter()
+            .flatten()
             .enumerate()
             .filter(|(index, _)| !self.mesh_disabled_chunks.contains(index))
+            .chain(nav.into_iter().flatten().enumerate())
             .chain(
                 self.gpu_mesh_dynamic
                     .iter()

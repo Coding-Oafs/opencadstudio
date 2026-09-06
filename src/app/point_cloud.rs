@@ -17,7 +17,8 @@ use ocs_pointcloud::{
     classification_statistics, parse_ptc, select_brush, select_nearest, select_polygon,
     sidecar_path_for_drawing, write_ptc, AttachmentState, ClassTable, ColorMode, Density,
     DisplaySettings, EditStore, ExportStats, PointFilter, PointPatch, PointSample, SampleOptions,
-    SelectionSet, SidecarStore, SurfaceSampler, TileCacheManifest, TileCacheOptions,
+    SelectionSet, SidecarStore, SurfaceSampler, TileCacheError, TileCacheManifest,
+    TileCacheOptions,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1188,6 +1189,23 @@ impl PointCloudJobProgress {
     }
 }
 
+/// Finished result of a background classifier job, waiting for the UI thread
+/// to commit it.
+#[derive(Debug)]
+struct ClassifyJobOutcome {
+    label: String,
+    touched: Vec<(String, EditStore)>,
+    total: usize,
+}
+
+/// Live state of a background classifier job (noise, ground, rules). The
+/// worker publishes its outcome through `done`; the stream tick polls it on
+/// the UI thread (`point_cloud_stream_needed` keeps the tick alive).
+#[derive(Debug, Default)]
+struct ClassifyJobState {
+    done: std::sync::Mutex<Option<ClassifyJobOutcome>>,
+}
+
 /// One attached LAS/LAZ source: its sample, sparse edits, selections and
 /// streaming state. Display configuration lives on the dataset so the merged
 /// view stays visually consistent across sources.
@@ -1220,6 +1238,11 @@ pub(super) struct PointCloudAttachment {
     stale_tile_results: u64,
     lru_clock: u64,
     screen_index: Option<ScreenSpatialIndex>,
+    /// Bumped when this source's selection sets change. Selection rides the
+    /// per-point instance flag, so only THIS source's GPU chunks need a
+    /// rewrite; keying them off the dataset-global display generation made
+    /// every brush stroke re-upload every source's arena (L3).
+    selection_revision: u64,
 }
 
 impl PointCloudAttachment {
@@ -1235,6 +1258,7 @@ impl PointCloudAttachment {
             drawing_bounds,
             edits: EditStore::default(),
             selection_sets: Vec::new(),
+            selection_revision: 0,
             cache_path: None,
             cache_manifest: None,
             index_cancel: None,
@@ -1338,8 +1362,11 @@ impl PointCloudAttachment {
 
     /// Number of points currently displayed for this source: the streamed
     /// active tiles when the LOD index is active, otherwise the bounded sample.
+    /// Keyed off residency rather than `stride == 0`: a tiny Auto sample (a
+    /// 1-point cloud reads with stride 1) still streams once a cache is
+    /// active, and must report the tiled working set.
     pub(super) fn displayed_len(&self) -> usize {
-        if self.sample.stride == 0 && !self.active_tiles.is_empty() {
+        if self.uses_resident_tiles() {
             self.active_tiles
                 .iter()
                 .filter_map(|key| self.resident_tiles.get(key))
@@ -1350,13 +1377,21 @@ impl PointCloudAttachment {
         }
     }
 
+    /// True when the active working set lives in `resident_tiles` rather than
+    /// the bounded sample. Resident tiles imply the sample was already
+    /// released by `rebuild_resident_display`, independent of what stride the
+    /// original read used.
+    fn uses_resident_tiles(&self) -> bool {
+        !self.resident_tiles.is_empty() && !self.active_tiles.is_empty()
+    }
+
     /// A contiguous snapshot of the active working set. Once the LOD index is
     /// built this flattens the active tiles on demand (and is dropped by the
     /// caller), so the streamed working set is never duplicated permanently.
     /// Selection and classification tools take a slice, so they use this
     /// rather than reaching into the resident tile map directly.
     pub(super) fn active_points(&self) -> Vec<ocs_pointcloud::SamplePoint> {
-        if self.sample.stride == 0 && !self.active_tiles.is_empty() {
+        if self.uses_resident_tiles() {
             let capacity = self
                 .active_tiles
                 .iter()
@@ -1396,10 +1431,17 @@ pub(super) struct PointCloudDataset {
     /// Native urban classification job; presence means a job is running.
     pub(super) urban_job: Option<Arc<UrbanJobState>>,
     pub(super) urban_status: String,
+    /// Background classifier job (noise/ground/rules); presence means the
+    /// worker is running or its result awaits the stream tick's drain.
+    pub(super) classify_job: Option<Arc<ClassifyJobState>>,
     /// UPCP label class table, present when an attached source carries a
     /// `label` extra dimension. Label mode colorizes through it instead of
     /// the ASPRS table so the two schemes never overwrite each other.
     pub(super) label_classes: Option<ClassTable>,
+    /// CAD paths most recently accepted by POINTCLOUDBREAKLINECHECK. Handles
+    /// are resolved and revalidated each time a TIN is built, so editing or
+    /// erasing a source cannot leave stale constraints in the terrain.
+    pub(super) breakline_handles: BTreeSet<acadrust::Handle>,
     display_generation: u64,
     /// Bumps on style-only changes (color mode, class visibility, class
     /// colors, point size): the GPU rewrites its style uniform, not the
@@ -1417,9 +1459,34 @@ pub(super) struct PointCloudDataset {
     /// Ids of the sources touched by the most recent edit action; undo steps
     /// exactly those sources so one cross-source action is undone as one.
     last_edit_sources: Option<Vec<String>>,
+    /// Classification statistics for the manager window, cached against a
+    /// signature of their inputs (display generation, per-source stream
+    /// clock, edit transactions). Computing them per UI frame cloned and
+    /// re-counted every active point, which froze the manager window on
+    /// multi-million-point datasets.
+    manager_stats_cache: std::cell::RefCell<
+        Option<(
+            (u64, u64, usize),
+            std::collections::BTreeMap<u8, ocs_pointcloud::ClassStatistics>,
+        )>,
+    >,
 }
 
 impl PointCloudDataset {
+    /// New empty dataset whose memory budgets match this machine's detected
+    /// RAM/GPU (or the user's persisted `POINTCLOUDBUDGET` preset). Derived
+    /// here — rather than in `ocs_pointcloud`'s `DisplaySettings::default` —
+    /// so the crate stays platform-neutral and explicit restores (sidecars)
+    /// still win over detection.
+    pub(super) fn for_this_machine() -> Self {
+        let mut dataset = Self::default();
+        let budget = crate::sys::resources::effective_budget();
+        dataset.display.point_budget = budget.point_budget;
+        dataset.display.gpu_budget_bytes = budget.gpu_budget_bytes;
+        dataset.display.cpu_budget_bytes = budget.cpu_budget_bytes;
+        dataset
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.sources.is_empty()
     }
@@ -1496,17 +1563,25 @@ impl PointCloudDataset {
             } else {
                 source.selection_sets.push(selection);
             }
+            // Selection-only change: the affected source's chunks rewrite,
+            // everything else stays resident. Do not bump the dataset-global
+            // display generation — that re-uploaded every source's arena.
+            source.selection_revision = source.selection_revision.wrapping_add(1).max(1);
+            source.screen_index = None;
         }
-        self.mark_display_changed();
     }
 
     fn clear_selections_named(&mut self, name: &str) {
         for source in &mut self.sources {
+            let before = source.selection_sets.len();
             source
                 .selection_sets
                 .retain(|selection| selection.name != name);
+            if source.selection_sets.len() != before {
+                source.selection_revision = source.selection_revision.wrapping_add(1).max(1);
+                source.screen_index = None;
+            }
         }
-        self.mark_display_changed();
     }
 
     /// Union of every source's metadata bounds for view fitting.
@@ -1590,7 +1665,7 @@ impl PointCloudDataset {
                 self.display_generation,
                 self.section_revision,
             );
-            let tiled = source.sample.stride == 0 && !source.active_tiles.is_empty();
+            let tiled = source.uses_resident_tiles();
             // A unified view of the source's active points: the streamed
             // resident tiles when tiled, otherwise the bounded sample. Only
             // references are collected — the points stay owned by
@@ -1727,6 +1802,12 @@ impl PointCloudDataset {
             self.bounds()
                 .map_or([0.0, 0.0], |(min, max)| [min[2], max[2]])
         });
+        // The uniform carries the Z range as midpoint + half-width, both
+        // computed in f64 here: the shader re-bases each point's
+        // double-single Z onto the midpoint, and absolute f32 min/max at
+        // state-plane elevations would band the gradient.
+        let elevation_mid = (elevation_range[0] + elevation_range[1]) * 0.5;
+        let elevation_half = (elevation_range[1] - elevation_range[0]) * 0.5;
         PointStyle {
             color_mode: match self.display.color_mode {
                 ColorMode::Classification => COLOR_MODE_CLASSIFICATION,
@@ -1741,7 +1822,7 @@ impl PointCloudDataset {
             class_visible,
             class_colors,
             intensity_range: [intensity_range[0] as f32, intensity_range[1] as f32],
-            elevation_range: [elevation_range[0] as f32, elevation_range[1] as f32],
+            elevation_range: [elevation_mid as f32, elevation_half as f32],
             section: self.section,
         }
     }
@@ -1790,6 +1871,14 @@ impl OpenCADStudio {
     }
 
     pub(super) fn point_cloud_stream_needed(&self, tab_index: usize) -> bool {
+        // A pending classifier on any tab also needs the frame tick: its
+        // worker publishes results through the job state, and the stream
+        // tick drains them (see `start_point_cloud_stream`). Checking every
+        // tab keeps delivery working while an inactive tab classifies.
+        let classify_running = self
+            .tabs
+            .iter()
+            .any(|tab| tab.point_cloud.classify_job.is_some());
         self.tabs.get(tab_index).is_some_and(|tab| {
             !tab.point_cloud.index_batch_active
                 && !tab
@@ -1797,11 +1886,12 @@ impl OpenCADStudio {
                     .sources
                     .iter()
                     .any(|cloud| cloud.stream_in_flight)
-                && tab.point_cloud.sources.iter().any(|cloud| {
-                    cloud.cache_manifest.is_some()
-                        && !cloud.stream_in_flight
-                        && cloud.stream_camera_generation != tab.scene.camera_generation
-                })
+                && (classify_running
+                    || tab.point_cloud.sources.iter().any(|cloud| {
+                        cloud.cache_manifest.is_some()
+                            && !cloud.stream_in_flight
+                            && cloud.stream_camera_generation != tab.scene.camera_generation
+                    }))
         })
     }
 
@@ -1871,25 +1961,51 @@ impl OpenCADStudio {
     }
 
     /// Translate a user-chosen [`Density`] into the sampling options used to
-    /// build the attach-time display sample.
-    fn sample_options_for(density: Density) -> SampleOptions {
+    /// build the attach-time display sample. `cap_points` bounds every mode —
+    /// no density may ask for unbounded memory, not even the user's own
+    /// decimation choices (`ocs_pointcloud::sample` widens the stride when
+    /// the cap binds, so a bounded sample still covers the whole file).
+    fn sample_options_for(density: Density, cap_points: usize) -> SampleOptions {
+        let cap = cap_points.max(1);
         match density {
             Density::Auto => SampleOptions {
-                max_points: DISPLAY_POINT_LIMIT,
+                max_points: DISPLAY_POINT_LIMIT.min(cap),
                 chunk_size: DISPLAY_READ_CHUNK,
                 stride: None,
             },
             Density::EveryNth(n) => SampleOptions {
-                max_points: usize::MAX,
+                max_points: cap,
                 chunk_size: DISPLAY_READ_CHUNK,
                 stride: Some(n.max(1)),
             },
             Density::Full => SampleOptions {
-                max_points: usize::MAX,
+                max_points: cap,
                 chunk_size: DISPLAY_READ_CHUNK,
                 stride: Some(1),
             },
         }
+    }
+
+    /// Point cap for one more attach sample in `tab_index`: the dataset CPU
+    /// budget minus the samples already held by attached sources, and never
+    /// more than half the RAM currently free (the resident tile pool and the
+    /// GPU display copy also need room). Keeps a minimal sample when the
+    /// budget is exhausted so a dense folder attaches degraded, not dead.
+    fn attach_sample_cap(&self, tab_index: usize) -> usize {
+        const MIN_SAMPLE_POINTS: usize = 65_536;
+        let point_bytes = std::mem::size_of::<ocs_pointcloud::SamplePoint>().max(1);
+        let held: usize = self.tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter()
+            .map(|source| source.sample.points.len().saturating_mul(point_bytes))
+            .sum();
+        let budget = self.tabs[tab_index].point_cloud.display.cpu_budget_bytes;
+        let mut cap = budget.saturating_sub(held) / point_bytes;
+        if let Some(available) = crate::sys::resources::available_memory() {
+            cap = cap.min(available as usize / 2 / point_bytes);
+        }
+        cap.max(MIN_SAMPLE_POINTS)
     }
 
     pub(super) fn start_point_cloud_load(&mut self, path: PathBuf) -> Task<Message> {
@@ -1912,11 +2028,12 @@ impl OpenCADStudio {
             .point_cloud
             .display
             .cpu_budget_bytes;
+        let sample_cap = self.attach_sample_cap(self.active_tab);
         let options = if density == Density::Full {
             let point_count = ocs_pointcloud::inspect(&path)
                 .map(|metadata| metadata.point_count)
                 .unwrap_or(u64::MAX);
-            if full_density_over_budget(point_count, budget) {
+            if point_count > sample_cap as u64 {
                 if find_valid_tile_cache(&path, None).is_some() {
                     self.command_line.push_info(
                         format!(
@@ -1929,25 +2046,27 @@ impl OpenCADStudio {
                     // stream tick; the cache is auto-activated in
                     // `install_point_cloud`.
                     density = Density::Auto;
-                    Self::sample_options_for(Density::Auto)
+                    Self::sample_options_for(Density::Auto, sample_cap)
                 } else {
                     self.tabs[self.active_tab].point_cloud.display.density = Density::Auto;
                     density = Density::Auto;
                     self.command_line.push_error(
                         format!(
-                            "POINTCLOUDATTACH: \"{}\" is too large to read at full density within the {} MB CPU budget. Falling back to Auto; build the LOD index (POINTCLOUDINDEX) to view it at full density.",
+                            "POINTCLOUDATTACH: \"{}\" is too large to read at full density within the remaining {} MB of the {} MB CPU budget. Falling back to Auto; build the LOD index (POINTCLOUDINDEX) to view it at full density.",
                             path.display(),
+                            sample_cap.saturating_mul(std::mem::size_of::<ocs_pointcloud::SamplePoint>())
+                                / (1024 * 1024),
                             budget / (1024 * 1024)
                         )
                         .as_str(),
                     );
-                    Self::sample_options_for(Density::Auto)
+                    Self::sample_options_for(Density::Auto, sample_cap)
                 }
             } else {
-                Self::sample_options_for(Density::Full)
+                Self::sample_options_for(Density::Full, sample_cap)
             }
         } else {
-            Self::sample_options_for(density)
+            Self::sample_options_for(density, sample_cap)
         };
         let density_desc = match density {
             Density::Auto => "bounded display sample".to_string(),
@@ -1975,6 +2094,90 @@ impl OpenCADStudio {
             },
             move |result| Message::PointCloudLoaded(tab_id, path, result),
         )
+    }
+
+    /// Apply a `POINTCLOUDBUDGET` argument — a preset name (`AUTO`, `LOW`,
+    /// `MEDIUM`, `HIGH`) or one or more field assignments (`POINTS n`,
+    /// `GPU mib`, `CPU mib`) — persist it, and update every open tab's live
+    /// budgets. New datasets pick the budget up at creation; already-loaded
+    /// samples keep their density (use `POINTCLOUDDENSITY` to re-read).
+    pub(super) fn set_point_cloud_budget(&mut self, arg: &str) {
+        use crate::sys::resources::{self, BudgetPreset};
+
+        const USAGE: &str = "Usage: POINTCLOUDBUDGET <AUTO|LOW|MEDIUM|HIGH> or POINTCLOUDBUDGET POINTS <n> GPU <mib> CPU <mib>";
+        let mut preset: Option<BudgetPreset> = None;
+        let mut points: Option<usize> = None;
+        let mut gpu_mib: Option<usize> = None;
+        let mut cpu_mib: Option<usize> = None;
+        let mut tokens = arg.split_whitespace();
+        while let Some(token) = tokens.next() {
+            match token.to_ascii_uppercase().as_str() {
+                "AUTO" | "LOW" | "MEDIUM" | "HIGH" => preset = BudgetPreset::parse(token),
+                "POINTS" => match tokens.next().and_then(|v| v.parse::<usize>().ok()) {
+                    Some(n) if (1_000..=100_000_000).contains(&n) => points = Some(n),
+                    _ => {
+                        self.command_line
+                            .push_error("POINTCLOUDBUDGET: POINTS must be 1,000–100,000,000.");
+                        self.command_line.push_error(USAGE);
+                        return;
+                    }
+                },
+                "GPU" => match tokens.next().and_then(|v| v.parse::<usize>().ok()) {
+                    Some(m) if (32..=16 * 1024).contains(&m) => gpu_mib = Some(m),
+                    _ => {
+                        self.command_line
+                            .push_error("POINTCLOUDBUDGET: GPU must be 32–16384 MiB.");
+                        self.command_line.push_error(USAGE);
+                        return;
+                    }
+                },
+                "CPU" => match tokens.next().and_then(|v| v.parse::<usize>().ok()) {
+                    Some(m) if (64..=64 * 1024).contains(&m) => cpu_mib = Some(m),
+                    _ => {
+                        self.command_line
+                            .push_error("POINTCLOUDBUDGET: CPU must be 64–65536 MiB.");
+                        self.command_line.push_error(USAGE);
+                        return;
+                    }
+                },
+                _ => {
+                    self.command_line.push_error(
+                        format!("POINTCLOUDBUDGET: unknown field \"{token}\". {USAGE}").as_str(),
+                    );
+                    return;
+                }
+            }
+        }
+        if let Some(preset) = preset {
+            resources::set_preset(preset);
+        } else if points.is_some() || gpu_mib.is_some() || cpu_mib.is_some() {
+            resources::set_custom(
+                points,
+                gpu_mib.map(|m| m * 1024 * 1024),
+                cpu_mib.map(|m| m * 1024 * 1024),
+            );
+        } else {
+            self.command_line
+                .push_error(format!("POINTCLOUDBUDGET: nothing to set. {USAGE}").as_str());
+            return;
+        }
+
+        let budget = resources::effective_budget();
+        for tab in &mut self.tabs {
+            tab.point_cloud.display.point_budget = budget.point_budget;
+            tab.point_cloud.display.gpu_budget_bytes = budget.gpu_budget_bytes;
+            tab.point_cloud.display.cpu_budget_bytes = budget.cpu_budget_bytes;
+            // Budgets shape the next display rebuild and stream tick; force
+            // both so the change is visible without waiting for a camera move.
+            tab.point_cloud.mark_display_changed();
+        }
+        self.command_line.push_output(
+            format!(
+                "POINTCLOUDBUDGET: applied to all drawings — {}.",
+                resources::budget_summary()
+            )
+            .as_str(),
+        );
     }
 
     /// Change the dataset load density and re-read every attached source at the
@@ -2018,8 +2221,14 @@ impl OpenCADStudio {
         if sources.is_empty() {
             return Task::none();
         }
-        let requested_options = Self::sample_options_for(density);
-        let auto_options = Self::sample_options_for(Density::Auto);
+        // Every source is re-read at the new density, so each sample gets an
+        // equal share of the budget rather than the whole of it.
+        let per_source_cap = {
+            let point_bytes = std::mem::size_of::<ocs_pointcloud::SamplePoint>().max(1);
+            (budget / sources.len().max(1) / point_bytes).max(65_536)
+        };
+        let requested_options = Self::sample_options_for(density, per_source_cap);
+        let auto_options = Self::sample_options_for(Density::Auto, per_source_cap);
         let mut tasks: Vec<Task<Message>> = Vec::new();
         let mut skipped_streaming = 0usize;
         let mut fell_back = false;
@@ -2360,6 +2569,21 @@ impl OpenCADStudio {
 
         let id = self.tabs[tab_index].point_cloud.next_source_id();
         let mut attachment = PointCloudAttachment::new(id, path.clone(), sample);
+        // Budget-capped reads widen the stride to keep the bounded sample
+        // spread across the whole file (see `ocs_pointcloud::sample`); tell
+        // the user their requested density was relaxed rather than silently
+        // showing them fewer points than they asked for.
+        if let Density::EveryNth(requested) = self.tabs[tab_index].point_cloud.display.density {
+            let effective = attachment.sample.stride;
+            if effective > requested as u64 {
+                self.command_line.push_info(
+                    format!(
+                        "POINTCLOUDATTACH: 1-in-{requested} exceeded the CPU memory budget; sampled 1-in-{effective} instead. Build the LOD index (POINTCLOUDINDEX) or raise the budget (POINTCLOUDBUDGET) for higher density."
+                    )
+                    .as_str(),
+                );
+            }
+        }
         // Auto scheme: switch to UPCP label coloring when the attached
         // source actually carries urban labels (the sampler only fills them
         // when a typed label dimension and provenance exist).
@@ -2434,6 +2658,12 @@ impl OpenCADStudio {
                             state.edits.normalize_after_load();
                             attachment.edits = state.edits;
                             attachment.selection_sets = state.selection_sets;
+                            // Restored selections render through the instance
+                            // flag; give the chunk hash a fresh revision.
+                            if !attachment.selection_sets.is_empty() {
+                                attachment.selection_revision =
+                                    attachment.selection_revision.wrapping_add(1).max(1);
+                            }
                             attachment.cache_path = state
                                 .cache_relative
                                 .and_then(|relative| {
@@ -2457,19 +2687,30 @@ impl OpenCADStudio {
                 }
             }
         }
-        if let Some((cache_path, manifest)) =
-            find_valid_tile_cache(&path, attachment.cache_path.as_deref())
-        {
-            let drawing_crs = self.tabs[tab_index]
-                .spatial
-                .drawing_crs
-                .as_ref()
-                .map(crate::app::spatial::DrawingCrs::as_crs_info)
-                .unwrap_or_else(|| attachment.source_crs.clone());
-            if let Err(error) = attachment.activate_cache(cache_path, manifest, &drawing_crs) {
-                self.command_line
-                    .push_error(format!("POINTCLOUDATTACH: LOD cache ignored: {error}").as_str());
+        match probe_tile_cache(&path, attachment.cache_path.as_deref()) {
+            TileCacheProbe::Valid(cache_path, manifest) => {
+                let drawing_crs = self.tabs[tab_index]
+                    .spatial
+                    .drawing_crs
+                    .as_ref()
+                    .map(crate::app::spatial::DrawingCrs::as_crs_info)
+                    .unwrap_or_else(|| attachment.source_crs.clone());
+                if let Err(error) = attachment.activate_cache(cache_path, manifest, &drawing_crs) {
+                    self.command_line.push_error(
+                        format!("POINTCLOUDATTACH: LOD cache ignored: {error}").as_str(),
+                    );
+                }
             }
+            // A cache that exists but fails validation would otherwise look
+            // like "never built"; point the user at the rebuild command.
+            TileCacheProbe::Invalid(cache_path, reason) => self.command_line.push_info(
+                format!(
+                    "POINTCLOUDATTACH: an outdated LOD cache exists for \"{}\" ({reason}); run POINTCLOUDINDEX to rebuild it.",
+                    cache_path.display()
+                )
+                .as_str(),
+            ),
+            TileCacheProbe::Absent => {}
         }
         let metadata = &attachment.sample.metadata;
         let point_count = metadata.point_count;
@@ -2849,7 +3090,7 @@ impl OpenCADStudio {
                 .push_info("POINTCLOUDDETACH: no LAS/LAZ cloud is attached.");
             return;
         }
-        self.tabs[tab_index].point_cloud = PointCloudDataset::default();
+        self.tabs[tab_index].point_cloud = PointCloudDataset::for_this_machine();
         self.tabs[tab_index]
             .scene
             .set_point_cloud(PointCloudModel::default());
@@ -3126,6 +3367,14 @@ impl OpenCADStudio {
     }
 
     pub(super) fn start_point_cloud_stream(&mut self, tab_index: usize) -> Task<Message> {
+        // Background classifier results are drained here because the tick
+        // that drives streaming is the one place already gated on
+        // `point_cloud_stream_needed` (which also reports pending classify
+        // jobs); the command-dispatch callers of the classifiers cannot
+        // return a `Task` home.
+        if self.apply_finished_classify_jobs() {
+            return Task::none();
+        }
         // A multi-source index batch is an atomic preparation phase. Starting
         // LOD streaming as each source finishes mixes coarse samples and tiled
         // sources for minutes, causing the large rectangular density changes
@@ -4309,12 +4558,18 @@ impl OpenCADStudio {
     }
 
     /// Runs an automated classifier over every source's display working set
-    /// and commits the sparse patches as audited, undoable transactions.
+    /// on a worker thread and commits the sparse patches as audited,
+    /// undoable transactions. The command-dispatch call sites discard any
+    /// returned `Task`, so completion cannot ride a `Message` home; instead
+    /// the frame tick that drives LOD streaming also drains finished jobs
+    /// (`point_cloud_stream_needed` gates the tick on `classify_job`).
     fn apply_classifier(
         &mut self,
         tab_index: usize,
         label: &str,
-        classify: impl Fn(&[ocs_pointcloud::SamplePoint]) -> ocs_pointcloud::ClassifyResult,
+        classify: impl Fn(&[ocs_pointcloud::SamplePoint]) -> ocs_pointcloud::ClassifyResult
+            + Send
+            + 'static,
     ) {
         let dataset = &self.tabs[tab_index].point_cloud;
         if dataset.is_empty() {
@@ -4322,6 +4577,13 @@ impl OpenCADStudio {
                 .push_error(format!("{label}: attach a LAS/LAZ cloud first.").as_str());
             return;
         }
+        if dataset.classify_job.is_some() {
+            self.command_line
+                .push_error(format!("{label}: a classification is already running.").as_str());
+            return;
+        }
+        // Snapshot the patched working sets so the worker never touches UI
+        // state; the committed edits ride back through the job's outcome.
         let sources: Vec<(
             String,
             Vec<ocs_pointcloud::SamplePoint>,
@@ -4343,51 +4605,101 @@ impl OpenCADStudio {
                 (source.id.clone(), points, source.edits.clone())
             })
             .collect();
-        let mut touched = Vec::new();
-        let mut total = 0_usize;
-        for (id, points, mut edits) in sources {
-            let result = classify(&points);
-            if result.is_empty() {
-                continue;
-            }
-            let changed = result.apply_grouped(&mut edits, label);
-            if changed == 0 {
-                continue;
-            }
-            total += changed;
-            touched.push((id, edits));
-        }
-        if touched.is_empty() {
-            self.command_line
-                .push_info(format!("{label}: no points matched.").as_str());
-            return;
-        }
-        let ids: Vec<String> = touched.iter().map(|(id, _)| id.clone()).collect();
-        {
-            let dataset = &mut self.tabs[tab_index].point_cloud;
-            for (id, edits) in touched {
-                if let Some(source) = dataset.source_mut(&id) {
-                    source.edits = edits;
-                }
-            }
-            dataset.note_edit_sources(ids.clone());
-            dataset.mark_display_changed();
-            let model = dataset.display_model();
-            self.tabs[tab_index].scene.set_point_cloud(model);
-        }
-        self.command_line.push_output(
+        let total_points: usize = sources.iter().map(|(_, points, _)| points.len()).sum();
+        let job = Arc::new(ClassifyJobState::default());
+        self.tabs[tab_index].point_cloud.classify_job = Some(Arc::clone(&job));
+        self.command_line.push_info(
             format!(
-                "{label}: classified {total} point(s) across {} source(s); export to publish.",
-                ids.len()
+                "{label}: classifying {total_points} point(s) across {} source(s) in the background...",
+                sources.len()
             )
             .as_str(),
         );
-        self.persist_point_cloud(
-            tab_index,
-            "classify",
-            &format!("{label}: {total} points"),
-            &ids,
-        );
+        let job_label = label.to_string();
+        std::thread::spawn(move || {
+            let mut touched = Vec::new();
+            let mut total = 0_usize;
+            for (id, points, mut edits) in sources {
+                let result = classify(&points);
+                if result.is_empty() {
+                    continue;
+                }
+                let changed = result.apply_grouped(&mut edits, &job_label);
+                if changed == 0 {
+                    continue;
+                }
+                total += changed;
+                touched.push((id, edits));
+            }
+            let mut done = job
+                .done
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *done = Some(ClassifyJobOutcome {
+                label: job_label,
+                touched,
+                total,
+            });
+        });
+    }
+
+    /// Commits the results of any finished background classifier job,
+    /// checking every tab (the tick runs for the active tab only). Returns
+    /// true when at least one job completed, so the caller yields this tick.
+    fn apply_finished_classify_jobs(&mut self) -> bool {
+        let mut applied = false;
+        for tab_index in 0..self.tabs.len() {
+            let outcome = match &self.tabs[tab_index].point_cloud.classify_job {
+                Some(job) => job
+                    .done
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take(),
+                None => continue,
+            };
+            let Some(ClassifyJobOutcome {
+                label,
+                touched,
+                total,
+            }) = outcome
+            else {
+                continue;
+            };
+            self.tabs[tab_index].point_cloud.classify_job = None;
+            applied = true;
+            if touched.is_empty() {
+                self.command_line
+                    .push_info(format!("{label}: no points matched.").as_str());
+                continue;
+            }
+            let ids: Vec<String> = touched.iter().map(|(id, _)| id.clone()).collect();
+            {
+                let dataset = &mut self.tabs[tab_index].point_cloud;
+                for (id, edits) in touched {
+                    if let Some(source) = dataset.source_mut(&id) {
+                        source.edits = edits;
+                    }
+                }
+                dataset.note_edit_sources(ids.clone());
+                dataset.mark_display_changed();
+                let model = dataset.display_model();
+                self.tabs[tab_index].scene.set_point_cloud(model);
+            }
+            self.command_line.push_output(
+                format!(
+                    "{label}: classified {total} point(s) across {} source(s); export to publish.",
+                    ids.len()
+                )
+                .as_str(),
+            );
+            self.persist_point_cloud(
+                tab_index,
+                "classify",
+                &format!("{label}: {total} points"),
+                &ids,
+            );
+        }
+        applied
     }
 
     pub(super) fn classify_point_cloud_noise(
@@ -4519,6 +4831,7 @@ impl OpenCADStudio {
         tab_index: usize,
         spacing: f64,
         vertical_offset: f64,
+        outside_policy: ocs_pointcloud::DrapeOutsidePolicy,
     ) {
         const GROUND_CLASS: u8 = 2;
         if !spacing.is_finite() || spacing <= 0.0 {
@@ -4567,6 +4880,34 @@ impl OpenCADStudio {
             return;
         }
 
+        let breakline_handles: Vec<_> = self.tabs[tab_index]
+            .point_cloud
+            .breakline_handles
+            .iter()
+            .copied()
+            .collect();
+        let registered_breaklines: Vec<ocs_pointcloud::Breakline> = breakline_handles
+            .iter()
+            .filter_map(|handle| {
+                let entity = self.tabs[tab_index].scene.document.get_entity(*handle)?;
+                let path = entity_drape_source(entity)?;
+                Some(ocs_pointcloud::Breakline {
+                    id: handle.to_string(),
+                    vertices: path.points,
+                    closed: path.closed,
+                })
+            })
+            .collect();
+        let breakline_issues = ocs_pointcloud::validate_breaklines(&registered_breaklines, None);
+        let active_breaklines = if breakline_issues.is_empty() {
+            registered_breaklines
+        } else {
+            self.command_line.push_info(
+                "POINTCLOUDDRAPE: registered breaklines changed and no longer validate; building the TIN without them. Run POINTCLOUDBREAKLINECHECK again.",
+            );
+            Vec::new()
+        };
+
         let dataset = &self.tabs[tab_index].point_cloud;
         let mut ground_points = Vec::new();
         let mut all_points = Vec::new();
@@ -4590,26 +4931,50 @@ impl OpenCADStudio {
             );
             (all_points, "all resident points")
         };
-        let Some(tin) = ocs_pointcloud::Tin::from_points(&surface_points, None) else {
-            self.command_line
-                .push_error("POINTCLOUDDRAPE: not enough points to build a terrain surface.");
-            return;
+        let tin = match ocs_pointcloud::Tin::from_points_with_breaklines(
+            &surface_points,
+            None,
+            &active_breaklines,
+        ) {
+            Ok(tin) => tin,
+            Err(error) => {
+                self.command_line.push_error(
+                    format!("POINTCLOUDDRAPE: could not build terrain surface: {error}.").as_str(),
+                );
+                return;
+            }
         };
         let triangle_count = tin.triangle_count();
 
         const MAX_DRAPED_MESH_VERTICES: usize = 1_000_000;
         let mut outputs = Vec::with_capacity(supported);
         let mut output_points = 0_usize;
+        let mut coverage_skipped = 0usize;
+        let mut clamped_objects = 0usize;
         for (path_index, source) in source_paths.iter().enumerate() {
-            let draped = match ocs_pointcloud::drape_path(
+            let draped = match ocs_pointcloud::drape_path_with_policy(
                 &source.points,
                 source.closed,
                 spacing,
                 vertical_offset,
                 &tin,
+                outside_policy,
             ) {
                 Ok(path) => path,
                 Err(error) => {
+                    if outside_policy == ocs_pointcloud::DrapeOutsidePolicy::Skip
+                        && matches!(error, ocs_pointcloud::DrapeError::OutsideSurface { .. })
+                    {
+                        coverage_skipped += 1;
+                        self.command_line.push_info(
+                            format!(
+                                "POINTCLOUDDRAPE: skipped path {} because part of it lies outside the terrain surface.",
+                                path_index + 1
+                            )
+                            .as_str(),
+                        );
+                        continue;
+                    }
                     self.command_line.push_error(
                         format!(
                             "POINTCLOUDDRAPE: path {} was not created: {error}. No draped entities were added.",
@@ -4620,6 +4985,14 @@ impl OpenCADStudio {
                     return;
                 }
             };
+            if outside_policy == ocs_pointcloud::DrapeOutsidePolicy::Clamp
+                && source
+                    .points
+                    .iter()
+                    .any(|point| tin.z_at(point[0], point[1]).is_none())
+            {
+                clamped_objects += 1;
+            }
             output_points = output_points.saturating_add(draped.points.len());
             let mut polyline = acadrust::entities::Polyline3D::from_points(
                 draped
@@ -4646,8 +5019,29 @@ impl OpenCADStudio {
                 );
                 return;
             }
+            let mut mesh_was_clamped = false;
+            let mut mesh_outside = false;
             for (vertex_index, vertex) in mesh.vertices.iter_mut().enumerate() {
-                let Some(elevation) = tin.elevation_at(vertex.x, vertex.y) else {
+                let elevation = tin.elevation_at(vertex.x, vertex.y).or_else(|| {
+                    (outside_policy == ocs_pointcloud::DrapeOutsidePolicy::Clamp)
+                        .then(|| tin.z_at_clamped(vertex.x, vertex.y))
+                        .flatten()
+                        .inspect(|_| mesh_was_clamped = true)
+                });
+                let Some(elevation) = elevation else {
+                    if outside_policy == ocs_pointcloud::DrapeOutsidePolicy::Skip {
+                        coverage_skipped += 1;
+                        mesh_outside = true;
+                        self.command_line.push_info(
+                            format!(
+                                "POINTCLOUDDRAPE: skipped mesh {} because vertex {} lies outside the terrain surface.",
+                                mesh_index + 1,
+                                vertex_index
+                            )
+                            .as_str(),
+                        );
+                        break;
+                    }
                     self.command_line.push_error(
                         format!(
                             "POINTCLOUDDRAPE: mesh {} vertex {} lies outside the terrain surface; no draped entities were added.",
@@ -4659,6 +5053,12 @@ impl OpenCADStudio {
                     return;
                 };
                 vertex.z = elevation + vertical_offset;
+            }
+            if mesh_outside {
+                continue;
+            }
+            if mesh_was_clamped {
+                clamped_objects += 1;
             }
             output_points = output_points.saturating_add(mesh.vertices.len());
             mesh.common.handle = acadrust::Handle::NULL;
@@ -4681,8 +5081,19 @@ impl OpenCADStudio {
             if let Some(pending) = pending {
                 self.commit_undo_delta(tab_index, pending);
             }
-            self.command_line
-                .push_error("POINTCLOUDDRAPE: the draped paths could not be added.");
+            if coverage_skipped == supported
+                && outside_policy == ocs_pointcloud::DrapeOutsidePolicy::Skip
+            {
+                self.command_line.push_output(
+                    format!(
+                        "POINTCLOUDDRAPE: skipped all {coverage_skipped} supported object(s) because they extend outside the terrain surface; no entities were added."
+                    )
+                    .as_str(),
+                );
+            } else {
+                self.command_line
+                    .push_error("POINTCLOUDDRAPE: the draped paths could not be added.");
+            }
             return;
         }
         self.tabs[tab_index].dirty = true;
@@ -4692,15 +5103,18 @@ impl OpenCADStudio {
         if let Some(pending) = pending {
             self.commit_undo_delta(tab_index, pending);
         }
+        let skipped = skipped + coverage_skipped;
         let skipped_note = if skipped == 0 {
             String::new()
         } else {
-            format!("; skipped {skipped} unsupported selected object(s)")
+            format!("; skipped {skipped} unsupported or out-of-coverage selected object(s)")
         };
         self.command_line.push_output(
             format!(
-                "POINTCLOUDDRAPE: created {} terrain-draped object(s) with {output_points} sampled vertices from a {triangle_count}-triangle TIN over {surface_label}; curve spacing {spacing}, vertical offset {vertical_offset}{skipped_note}.",
-                created_handles.len()
+                "POINTCLOUDDRAPE: created {} terrain-draped object(s) with {output_points} sampled vertices from a {triangle_count}-triangle TIN over {surface_label}, using {} validated breakline(s); curve spacing {spacing}, vertical offset {vertical_offset}, outside policy {:?}, clamped {clamped_objects} object(s){skipped_note}.",
+                created_handles.len(),
+                active_breaklines.len(),
+                outside_policy
             )
             .as_str(),
         );
@@ -4775,18 +5189,24 @@ impl OpenCADStudio {
             );
             return;
         }
-        let lines: Vec<ocs_pointcloud::Breakline> = self.tabs[tab_index]
+        let selected: Vec<(acadrust::Handle, ocs_pointcloud::Breakline)> = self.tabs[tab_index]
             .scene
             .selected_entities()
             .into_iter()
             .filter_map(|(handle, entity)| {
-                entity_drape_source(entity).map(|path| ocs_pointcloud::Breakline {
-                    id: handle.to_string(),
-                    vertices: path.points,
-                    closed: path.closed,
+                entity_drape_source(entity).map(|path| {
+                    (
+                        handle,
+                        ocs_pointcloud::Breakline {
+                            id: handle.to_string(),
+                            vertices: path.points,
+                            closed: path.closed,
+                        },
+                    )
                 })
             })
             .collect();
+        let lines: Vec<_> = selected.iter().map(|(_, line)| line.clone()).collect();
         if lines.is_empty() {
             self.command_line.push_error(
                 "POINTCLOUDBREAKLINECHECK: select one or more finite CAD curves or polylines.",
@@ -4794,6 +5214,10 @@ impl OpenCADStudio {
             return;
         }
         let issues = ocs_pointcloud::validate_breaklines(&lines, max_grade);
+        if issues.is_empty() {
+            self.tabs[tab_index].point_cloud.breakline_handles =
+                selected.iter().map(|(handle, _)| *handle).collect();
+        }
         for issue in issues.iter().take(100) {
             let segment = issue
                 .segment
@@ -4810,13 +5234,18 @@ impl OpenCADStudio {
         let truncated = issues.len().saturating_sub(100);
         self.command_line.push_output(
             format!(
-                "POINTCLOUDBREAKLINECHECK: validated {} breakline(s); {} issue(s){}.",
+                "POINTCLOUDBREAKLINECHECK: validated {} breakline(s); {} issue(s){}{}.",
                 lines.len(),
                 issues.len(),
                 if truncated > 0 {
                     format!(" ({truncated} additional issue(s) omitted)")
                 } else {
                     String::new()
+                },
+                if issues.is_empty() {
+                    "; registered for subsequent terrain TINs"
+                } else {
+                    "; previous registered set unchanged"
                 }
             )
             .as_str(),
@@ -5926,15 +6355,40 @@ impl PointCloudDataset {
             .next()
             .or(self.export_all_job.as_ref())
             .map(|job| (job.completed.load(Ordering::Relaxed), job.total));
-        let points = self.sources.iter().flat_map(|source| {
-            source.active_points().into_iter().map(|point| {
-                source
-                    .edits
-                    .patch_for(point.source_index)
-                    .map_or(point.clone(), |patch| point.with_patch(patch))
-            })
-        });
-        let statistics = classification_statistics(points);
+        // Statistics only change when the inputs change: classification
+        // edits (each records a transaction), streaming arrivals (each ticks
+        // the source's LRU clock), or anything that bumps the display
+        // generation (installs, re-reads, undo). Recompute only then.
+        let stats_key = (
+            self.display_generation,
+            self.sources
+                .iter()
+                .map(|source| source.lru_clock)
+                .sum::<u64>(),
+            self.sources
+                .iter()
+                .map(|source| source.edits.transaction_count())
+                .sum::<usize>(),
+        );
+        let statistics = {
+            let mut cache = self.manager_stats_cache.borrow_mut();
+            match cache.as_ref() {
+                Some((key, stats)) if *key == stats_key => stats.clone(),
+                _ => {
+                    let points = self.sources.iter().flat_map(|source| {
+                        source.active_points().into_iter().map(|point| {
+                            source
+                                .edits
+                                .patch_for(point.source_index)
+                                .map_or(point.clone(), |patch| point.with_patch(patch))
+                        })
+                    });
+                    let stats = classification_statistics(points);
+                    *cache = Some((stats_key, stats.clone()));
+                    stats
+                }
+            }
+        };
         let class_rows = self
             .classes
             .classes
@@ -6080,6 +6534,7 @@ impl PointCloudDataset {
             cpu_memory_bytes: resident_points
                 .saturating_mul(std::mem::size_of::<ocs_pointcloud::SamplePoint>()),
             gpu_memory_bytes: displayed_points.saturating_mul(GPU_POINT_BYTES),
+            budget_label: crate::sys::resources::budget_summary(),
             lod_label,
             pending_tile_requests: self
                 .sources
@@ -6199,7 +6654,7 @@ fn source_display_point_count(
     source: &PointCloudAttachment,
     corridor: Option<&SectionCorridor>,
 ) -> usize {
-    let tiled = source.sample.stride == 0 && !source.active_tiles.is_empty();
+    let tiled = source.uses_resident_tiles();
     let includes = |point: &ocs_pointcloud::SamplePoint| {
         corridor.is_none_or(|corridor| corridor.contains_xy(point.position[0], point.position[1]))
     };
@@ -6668,11 +7123,6 @@ fn source_chunk_generation(
     section_revision: u64,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
-    let selection_len: u64 = source
-        .selection_sets
-        .iter()
-        .find(|selection| selection.name == "active")
-        .map_or(0, SelectionSet::len);
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source.id.hash(&mut hasher);
     source.active_tiles.hash(&mut hasher);
@@ -6680,7 +7130,10 @@ fn source_chunk_generation(
     source.displayed_len().hash(&mut hasher);
     source_quota.hash(&mut hasher);
     source.edits.transaction_count().hash(&mut hasher);
-    selection_len.hash(&mut hasher);
+    // Per-source selection revision, not the dataset-global display
+    // generation: a brush stroke on one source must not rewrite the other
+    // sources' resident chunks.
+    source.selection_revision.hash(&mut hasher);
     display_generation.hash(&mut hasher);
     section_revision.hash(&mut hasher);
     hasher.finish()
@@ -6901,25 +7354,58 @@ fn point_cloud_cache_candidates(
     candidates
 }
 
+/// Outcome of probing a source's cache candidates: a validated cache, no
+/// cache at all, or a present-but-unusable one (obsolete format, corrupt
+/// manifest, or a fingerprint from a different file revision) whose reason
+/// must reach the user instead of silently showing "Not built".
+enum TileCacheProbe {
+    Valid(PathBuf, TileCacheManifest),
+    Absent,
+    Invalid(PathBuf, String),
+}
+
+fn probe_tile_cache(
+    source: &std::path::Path,
+    persisted: Option<&std::path::Path>,
+) -> TileCacheProbe {
+    let mut invalid: Option<(PathBuf, String)> = None;
+    for cache_path in point_cloud_cache_candidates(source, persisted) {
+        let failure = match TileCacheManifest::open(&cache_path) {
+            Ok(manifest) => match manifest.validate_source(source) {
+                Ok(()) => return TileCacheProbe::Valid(cache_path, manifest),
+                Err(error) => Some(error.to_string()),
+            },
+            // A missing manifest means this candidate holds no cache at all;
+            // any other open failure means one exists but cannot be used.
+            Err(TileCacheError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
+            Err(error) => Some(error.to_string()),
+        };
+        if invalid.is_none() {
+            invalid = failure.map(|reason| (cache_path.clone(), reason));
+        }
+    }
+    match invalid {
+        Some((path, reason)) => TileCacheProbe::Invalid(path, reason),
+        None => TileCacheProbe::Absent,
+    }
+}
+
 fn find_valid_tile_cache(
     source: &std::path::Path,
     persisted: Option<&std::path::Path>,
 ) -> Option<(PathBuf, TileCacheManifest)> {
-    point_cloud_cache_candidates(source, persisted)
-        .into_iter()
-        .find_map(|cache_path| {
-            TileCacheManifest::open(&cache_path)
-                .and_then(|manifest| {
-                    manifest.validate_source(source)?;
-                    Ok((cache_path, manifest))
-                })
-                .ok()
-        })
+    match probe_tile_cache(source, persisted) {
+        TileCacheProbe::Valid(path, manifest) => Some((path, manifest)),
+        TileCacheProbe::Absent | TileCacheProbe::Invalid(..) => None,
+    }
 }
 
-/// True when a full-density (`Density::Full`) read of `point_count` points would
-/// exceed `cpu_budget_bytes`. Only `Full` is unbounded; `Auto` and explicit
-/// 1-in-N samples are the user's own decimation choices and are left untouched.
+/// True when a full-density (`Density::Full`) read of `point_count` points
+/// would exceed `cpu_budget_bytes`. `sample()` now caps and spreads every
+/// density mode, so this is only the cheap pre-flight that picks the nicer
+/// fallback (LOD-cache streaming or Auto) before a read is even started.
 fn full_density_over_budget(point_count: u64, cpu_budget_bytes: usize) -> bool {
     let point_size = std::mem::size_of::<ocs_pointcloud::SamplePoint>().max(1) as u64;
     point_count.saturating_mul(point_size) > cpu_budget_bytes as u64

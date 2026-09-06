@@ -105,6 +105,11 @@ impl<'a> HostSession<'a> {
     }
 
     pub fn bump_geometry(&mut self) {
+        // Full rebuild by contract: the plugin mutated the document directly
+        // through `document_mut()` and this trait method carries no changed-
+        // handle list, so the host cannot know which entities to name in an
+        // incremental `bump_entities`. The typed edit paths (`update_entity`,
+        // `add_entity`, `remove_entity`) already bump per-handle.
         self.app.tabs[self.tab].scene.bump_geometry();
     }
 

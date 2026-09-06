@@ -101,7 +101,17 @@ impl CadCommand for AngularDimensionCommand {
                 dim.base.definition_point = v3(pt);
                 dim.base.text_middle_point = v3(pt);
                 dim.base.insertion_point = v3(pt);
-                dim.base.actual_measurement = dim.measurement_degrees();
+                // Store the sweep of the sector the arc point picked — reflex
+                // included — so the persisted value matches the drawn arc
+                // instead of acadrust's always-minor angle.
+                let angle_to = |p: Vector3| (p.y - vertex.y).atan2(p.x - vertex.x) as f32;
+                let (start, end) = crate::entities::dimension::angular_sector(
+                    angle_to(v3(first)),
+                    angle_to(v3(second)),
+                    angle_to(v3(pt)),
+                );
+                dim.base.actual_measurement =
+                    ((end - start).rem_euclid(std::f32::consts::TAU) as f64).to_degrees();
                 CmdResult::CommitAndExit(self.plane.place_entity(EntityType::Dimension(
                     Dimension::Angular3Pt(dim),
                 )))
@@ -207,21 +217,25 @@ fn angular_preview(vertex: Vec3, first: Vec3, second: Vec3, arc_pt: Vec3) -> Vec
     if r <= 1e-6 {
         return points;
     }
-    let a0 = (first.y - vertex.y).atan2(first.x - vertex.x);
-    let mut a1 = (second.y - vertex.y).atan2(second.x - vertex.x);
-    let mut delta = a1 - a0;
-    while delta <= 0.0 {
+    let angle_to = |p: Vec3| (p.y - vertex.y).atan2(p.x - vertex.x);
+    // Same sector rule as the committed geometry (entities::dimension):
+    // the arc point picks the side it lies on, reflex included.
+    let (start, end) = crate::entities::dimension::angular_sector(
+        angle_to(first),
+        angle_to(second),
+        angle_to(arc_pt),
+    );
+    let mut delta = end - start;
+    while delta < 0.0 {
         delta += std::f32::consts::TAU;
     }
-    if delta > std::f32::consts::PI {
-        a1 -= std::f32::consts::TAU;
-        delta = a1 - a0;
-    }
-    let steps = 24;
-    for i in 0..=steps {
-        let t = i as f32 / steps as f32;
-        let a = a0 + delta * t;
-        points.push(vertex + Vec3::new(a.cos() * r, a.sin() * r, 0.0));
+    if delta > 1e-6 {
+        let steps = 24;
+        for i in 0..=steps {
+            let t = i as f32 / steps as f32;
+            let a = start + delta * t;
+            points.push(vertex + Vec3::new(a.cos() * r, a.sin() * r, 0.0));
+        }
     }
     points
 }

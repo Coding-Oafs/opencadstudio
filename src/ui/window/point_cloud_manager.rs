@@ -57,6 +57,10 @@ pub struct PointCloudManagerData {
     pub visible_tiles: usize,
     pub cpu_memory_bytes: usize,
     pub gpu_memory_bytes: usize,
+    /// Machine-derived budget line (preset, detected RAM, point/GPU/CPU
+    /// ceilings) so users can see what caps the session without opening a
+    /// terminal; edit via `POINTCLOUDBUDGET`.
+    pub budget_label: String,
     pub lod_label: String,
     pub pending_tile_requests: usize,
     pub cancelled_tile_requests: u64,
@@ -185,6 +189,7 @@ pub fn view_window(
                     data.gpu_memory_bytes as f64 / (1024.0 * 1024.0)
                 ),
             ),
+            status("Budget", data.budget_label),
             status(
                 "Tile requests",
                 format!(

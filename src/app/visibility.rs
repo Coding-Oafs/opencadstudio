@@ -201,19 +201,29 @@ impl OpenCADStudio {
 
         self.push_undo_snapshot(i, "Visibility State");
 
-        // Apply invisibility flags to the anonymous block's members.
+        // Apply invisibility flags to the anonymous block's members, keeping
+        // only the members whose flag actually flipped.
+        let mut flipped = Vec::new();
         {
             let doc = &mut self.tabs[i].scene.document;
             for (idx, h) in mapping.anon_handles.iter().enumerate() {
                 let visible = mapping.visible_idx.contains(&idx);
                 if let Some(e) = doc.get_entity_mut(*h) {
-                    e.common_mut().invisible = !visible;
+                    if e.common().invisible == visible {
+                        e.common_mut().invisible = !visible;
+                        flipped.push(*h);
+                    }
                 }
             }
         }
 
         self.visibility_popup = None;
-        self.tabs[i].scene.bump_geometry();
+        if !flipped.is_empty() {
+            super::find_replace::refresh_block_definition_edits(
+                &mut self.tabs[i].scene,
+                &flipped,
+            );
+        }
         self.tabs[i].dirty = true;
         self.refresh_selected_grips();
     }

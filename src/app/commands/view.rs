@@ -655,7 +655,7 @@ impl OpenCADStudio {
                     let margin = 5.0_f64; // mm margin around the usable area
                     let uw = paper_w - 2.0 * margin; // usable width
                     let uh = paper_h - 2.0 * margin; // usable height
-                                                     // Collect rectangle specs: (cx, cz, w, h) in mm
+                    // Collect rectangle specs: (cx, cz, w, h) in mm
                     let rects: Vec<(f64, f64, f64, f64)> = match sub.as_str() {
                         "2H" => {
                             // Two viewports side by side (horizontal split)
@@ -1095,7 +1095,8 @@ impl OpenCADStudio {
                     .collect();
                 if vps.len() < 2 {
                     self.command_line.push_error(
-                        "SYNCPVIEWPORTS: select two or more viewports (the first is the master).",
+                        crate::tf!("SYNCPVIEWPORTS: select two or more viewports (the first is the master).")
+                            .as_ref(),
                     );
                     return Some(Task::none());
                 }
