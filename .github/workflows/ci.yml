@@ -1,0 +1,33 @@
+name: Desktop and web regression checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Isolate application configuration
+        shell: pwsh
+        run: |
+          "APPDATA=$env:RUNNER_TEMP\ocs-test-config" >> $env:GITHUB_ENV
+      - name: Verify complete workspace
+        run: cargo test --workspace --locked --jobs 2 -- --test-threads=1
+  web:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup target add wasm32-unknown-unknown
+      - name: Verify browser build
+        run: cargo check --locked --target wasm32-unknown-unknown --lib

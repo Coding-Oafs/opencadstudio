@@ -704,6 +704,8 @@ impl OpenCADStudio {
             }
             DockMsg::Close(id) => {
                 match id {
+                    PanelId::ProjectExplorer => self.show_project_explorer = false,
+                    PanelId::Jobs => self.show_jobs = false,
                     PanelId::BlockPalette => {
                         self.show_block_palette = false;
                         self.block_palette.placing = None;
@@ -722,6 +724,7 @@ impl OpenCADStudio {
                 if self.dock_resizing == Some(id) {
                     self.dock_resizing = None;
                 }
+                self.save_config();
                 iced::Task::none()
             }
             DockMsg::Hover(id) => {
@@ -806,6 +809,8 @@ impl OpenCADStudio {
         match id {
             PanelId::Properties => self.show_properties,
             PanelId::BlockPalette => self.show_block_palette,
+            PanelId::ProjectExplorer => self.show_project_explorer,
+            PanelId::Jobs => self.show_jobs,
         }
     }
 

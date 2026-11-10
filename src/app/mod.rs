@@ -31,10 +31,16 @@ pub(crate) mod settings;
 mod shortcuts;
 mod spatial;
 mod style_ops;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod terrain;
+#[cfg(not(target_arch = "wasm32"))]
+mod terrain_store;
 mod text_inline;
+mod tool_center;
 mod update;
 mod view;
 mod visibility;
+mod workspace;
 
 pub use style_ops::StyleKind;
 
@@ -350,6 +356,9 @@ pub(super) struct OpenCADStudio {
     /// Active cancellable tile job. Atomics drive a lightweight status-bar
     /// progress readout without sending one UI message per tile.
     basemap_job: Option<crate::app::basemap::BasemapJob>,
+    /// `TERRAIN` fetch job, if one is running (see `crate::app::terrain`).
+    #[cfg(not(target_arch = "wasm32"))]
+    terrain_job: Option<crate::app::terrain::TerrainJob>,
     /// The running Rhai macro, if any: its request inbox and outcome.
     #[cfg(not(target_arch = "wasm32"))]
     script_runner: Option<scripting::ScriptRunner>,
@@ -599,6 +608,9 @@ pub(super) struct OpenCADStudio {
     render_mode_preview: Option<acadrust::entities::ViewportRenderMode>,
     /// Whether the Properties panel is shown on the left (PROPERTIES).
     show_properties: bool,
+    show_project_explorer: bool,
+    show_jobs: bool,
+    workspace_search: String,
     /// Docked Insert Block panel visibility.
     pub(crate) show_block_palette: bool,
     /// General edge-stack dock layout for the side panels.
@@ -648,6 +660,9 @@ pub(super) struct OpenCADStudio {
     /// The open in-canvas modal dialog, if any (Plan B: shared overlay instead
     /// of OS windows).
     active_modal: Option<ModalKind>,
+    tool_center: crate::ui::window::tool_center::ToolCenter,
+    #[cfg(not(target_arch = "wasm32"))]
+    terrain_panel: crate::ui::window::terrain_panel::TerrainPanel,
     #[cfg(not(target_arch = "wasm32"))]
     platform_manager: crate::ui::window::platform_manager::PlatformManagerState,
     /// Plot modal geometry preserved while the Plot Style editor is open as
@@ -1572,6 +1587,9 @@ impl ClipboardDeps {
 /// modal's ✕ (`Message::CloseModal`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ModalKind {
+    ToolCenter,
+    #[cfg(not(target_arch = "wasm32"))]
+    TerrainPanel,
     About,
     Shortcuts,
     PluginManager,
@@ -1745,7 +1763,31 @@ impl MeshImportKind {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    ToolCenterOpen(String),
+    ToolCenterSearch(String),
+    ToolCenterCategory(String),
+    ToolCenterSelect(usize),
+    ToolCenterValue(usize, String),
+    ToolCenterRun(String),
+    #[cfg(not(target_arch = "wasm32"))]
+    TerrainPanelOpen,
+    #[cfg(not(target_arch = "wasm32"))]
+    TerrainPanelValue(usize, String),
+    #[cfg(not(target_arch = "wasm32"))]
+    TerrainPanelZoom(u32),
+    #[cfg(not(target_arch = "wasm32"))]
+    TerrainPanelOutside(String),
+    #[cfg(not(target_arch = "wasm32"))]
+    TerrainPanelAction(crate::ui::window::terrain_panel::TerrainAction),
+    #[cfg(not(target_arch = "wasm32"))]
+    TerrainPanelCommand(String),
+    #[cfg(not(target_arch = "wasm32"))]
+    GisImportPicked(Option<std::path::PathBuf>),
     Tick(Instant),
+    WorkspaceSearch(String),
+    WorkspaceFocus(crate::ui::window::workspace::Target),
+    WorkspaceCancel(crate::ui::window::workspace::CancelJob),
+    WorkspaceLog,
     /// Periodic drain of plugin-to-host requests that arrived outside a host
     /// call (e.g. mutations from the Python REPL).
     #[cfg(not(target_arch = "wasm32"))]
@@ -3207,6 +3249,11 @@ pub enum Message {
     ),
     /// A background basemap tile fetch finished.
     BasemapLoaded(crate::app::basemap::BasemapLoaded),
+    /// A background TERRAIN elevation fetch finished (native builds only).
+    #[cfg(not(target_arch = "wasm32"))]
+    TerrainLoaded(crate::app::terrain::TerrainLoaded),
+    #[cfg(not(target_arch = "wasm32"))]
+    TerrainRestored(u64, String, Result<crate::app::terrain::TerrainDataset, String>),
     /// Periodic redraw while a basemap job updates its atomic progress.
     BasemapProgressTick,
     #[cfg(not(target_arch = "wasm32"))]
@@ -3335,6 +3382,8 @@ impl OpenCADStudio {
             basemap: crate::scene::basemap::BasemapSettings::default(),
             basemap_job: None,
             #[cfg(not(target_arch = "wasm32"))]
+            terrain_job: None,
+            #[cfg(not(target_arch = "wasm32"))]
             script_runner: None,
             props_asym_scale: std::collections::HashSet::new(),
             start_section: StartSection::default(),
@@ -3428,6 +3477,9 @@ impl OpenCADStudio {
             render_mode_menu_open: false,
             render_mode_preview: None,
             show_properties: true,
+            show_project_explorer: true,
+            show_jobs: false,
+            workspace_search: String::new(),
             show_block_palette: false,
             block_palette: Default::default(),
             show_tool_palettes: false,
@@ -3457,6 +3509,9 @@ impl OpenCADStudio {
             color_picker_tab: ColorPickerTab::Index,
             recent_colors: Vec::new(),
             active_modal: None,
+            tool_center: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            terrain_panel: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             platform_manager: Default::default(),
             plotstyle_parent_plot_geometry: None,

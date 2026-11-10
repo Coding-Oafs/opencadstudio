@@ -1484,6 +1484,8 @@ impl OpenCADStudio {
             match id {
                 crate::ui::dock::PanelId::Properties => self.show_properties,
                 crate::ui::dock::PanelId::BlockPalette => self.show_block_palette,
+                crate::ui::dock::PanelId::ProjectExplorer => self.show_project_explorer,
+                crate::ui::dock::PanelId::Jobs => self.show_jobs,
             }
         };
         let edge_stack = |side: crate::app::config::DockSide| -> Option<Element<'_, Message>> {
@@ -2136,7 +2138,12 @@ impl OpenCADStudio {
         } else {
             Subscription::none()
         };
-        let basemap_progress = if self.basemap_job.is_some() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let terrain_busy = self.terrain_job.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let terrain_busy = false;
+        let jobs_busy = self.show_jobs && !self.workspace_jobs().is_empty();
+        let basemap_progress = if self.basemap_job.is_some() || terrain_busy || jobs_busy {
             iced::time::every(std::time::Duration::from_millis(200))
                 .map(|_| Message::BasemapProgressTick)
         } else {
@@ -2495,6 +2502,10 @@ impl OpenCADStudio {
             crate::ui::dock::PanelId::BlockPalette => {
                 crate::ui::window::block_palette::view(&self.block_palette, width, auto_collapse)
             }
+            crate::ui::dock::PanelId::ProjectExplorer => crate::ui::window::workspace::explorer(
+                &self.workspace_search, self.explorer_rows(), width, auto_collapse),
+            crate::ui::dock::PanelId::Jobs => crate::ui::window::workspace::jobs(
+                self.workspace_jobs(), self.workspace_job_history(), width, auto_collapse),
         };
         let divider = dock_divider(id);
         match side {

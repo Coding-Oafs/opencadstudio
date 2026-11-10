@@ -295,6 +295,30 @@ impl CadModule for ViewModule {
                             )),
                             event: ModuleEvent::Command("BASEMAP".to_string()),
                         }),
+                        RibbonItem::Tool(ToolDef {
+                            id: "TERRAIN_AREA",
+                            label: "Terrain\nArea",
+                            icon: IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/underlay_frames.svg"
+                            )),
+                            event: ModuleEvent::Command("TERRAIN AREA".to_string()),
+                        }),
+                        RibbonItem::Tool(ToolDef {
+                            id: "TERRAIN_MESH",
+                            label: "Terrain\nMesh",
+                            icon: IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/solid.svg"
+                            )),
+                            event: ModuleEvent::Command("TERRAIN MESH".to_string()),
+                        }),
+                        RibbonItem::Tool(ToolDef {
+                            id: "TERRAIN_INFO",
+                            label: "Terrain\nInfo",
+                            icon: IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/point.svg"
+                            )),
+                            event: ModuleEvent::Command("TERRAIN INFO".to_string()),
+                        }),
                     ],
                 },
                 // ── Plot ──────────────────────────────────────────────────────────

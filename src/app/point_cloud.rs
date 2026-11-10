@@ -29,16 +29,79 @@ use std::{
     },
 };
 
+impl OpenCADStudio {
+    pub(super) fn focus_cloud_source(&mut self, tab: usize, id: &str) {
+        if let Some(source) = self.tabs[tab].point_cloud.source(id) {
+            let bounds = source.drawing_bounds;
+            self.tabs[tab].scene.fit_external_bounds(bounds.0, bounds.1);
+        }
+    }
+
+    /// Cheap progress snapshots; do not compute working-set classification statistics here.
+    pub(super) fn point_cloud_job_rows(&self) -> Vec<crate::ui::window::workspace::JobRow> {
+        use crate::ui::window::workspace::{CancelJob, JobKind, JobRow};
+        let mut rows = Vec::new();
+        for tab in &self.tabs {
+            let dataset = &tab.point_cloud;
+            for source in &dataset.sources {
+                for (kind, job) in [(JobKind::Index, source.index_job.as_ref()), (JobKind::Export, source.export_job.as_ref())] {
+                    if let Some(job) = job {
+                        rows.push(JobRow { name: match kind { JobKind::Index => "Build point-cloud index", _ => "Export point cloud" }.into(),
+                            detail: format!("{} · {}{}", tab.tab_title, source.source_path.display(), if job.cancel.load(Ordering::Relaxed) { " · cancelling" } else { "" }),
+                            completed: job.completed.load(Ordering::Relaxed), total: job.total,
+                            cancel: Some(CancelJob { tab: tab.id, kind, source: source.id.clone(), token: Arc::as_ptr(job) as u64 }) });
+                    }
+                }
+            }
+            if let Some(job) = &dataset.export_all_job {
+                rows.push(JobRow { name: "Merged point-cloud export".into(), detail: tab.tab_title.clone(),
+                    completed: job.completed.load(Ordering::Relaxed), total: job.total,
+                    cancel: Some(CancelJob { tab: tab.id, kind: JobKind::Merge, source: String::new(), token: Arc::as_ptr(job) as u64 }) });
+            }
+            if let Some(job) = &dataset.urban_job {
+                let s = job.snapshot();
+                rows.push(JobRow { name: "Urban classification".into(), detail: format!("{} · stage {} · tile {} / {}", tab.tab_title, s.stage, s.tile_index, s.tile_total),
+                    completed: s.points_done, total: s.points_total,
+                    cancel: Some(CancelJob { tab: tab.id, kind: JobKind::Urban, source: String::new(), token: Arc::as_ptr(job) as u64 }) });
+            }
+            if dataset.classify_job.is_some() {
+                rows.push(JobRow { name: "Point classification".into(), detail: format!("{} · processing; result commits atomically", tab.tab_title), completed: 0, total: 0, cancel: None });
+            }
+        }
+        rows
+    }
+
+    pub(super) fn cancel_cloud_job(&mut self, key: &crate::ui::window::workspace::CancelJob) {
+        use crate::ui::window::workspace::JobKind;
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == key.tab) else { return; };
+        let d = &mut tab.point_cloud;
+        let matches = |job: &Arc<PointCloudJobProgress>| Arc::as_ptr(job) as u64 == key.token;
+        match key.kind {
+            JobKind::Index => {
+                if let Some(source) = d.source(&key.source).filter(|s| s.index_job.as_ref().is_some_and(matches)) {
+                    if let Some(cancel) = &source.index_cancel { cancel.store(true, Ordering::Relaxed); }
+                    if let Some(job) = &source.index_job { job.cancel.store(true, Ordering::Relaxed); }
+                    d.index_batch_active = false;
+                }
+            }
+            JobKind::Export => if let Some(job) = d.source(&key.source).and_then(|s| s.export_job.as_ref()).filter(|j| matches(j)) { job.cancel.store(true, Ordering::Relaxed); },
+            JobKind::Merge => if let Some(job) = d.export_all_job.as_ref().filter(|j| matches(j)) { job.cancel.store(true, Ordering::Relaxed); },
+            JobKind::Urban => if let Some(job) = d.urban_job.as_ref().filter(|j| Arc::as_ptr(j) as u64 == key.token) { job.cancel.store(true, Ordering::Relaxed); d.urban_status = "Cancellation requested".into(); },
+            _ => {},
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
-struct DrapeSourcePath {
-    points: Vec<[f64; 3]>,
-    closed: bool,
+pub(super) struct DrapeSourcePath {
+    pub(super) points: Vec<[f64; 3]>,
+    pub(super) closed: bool,
 }
 
 /// Converts supported CAD curve entities to a world-space path. Planar curve
 /// entities go through the existing kernel tessellator so bulged polyline
 /// segments are not silently replaced with chords before terrain sampling.
-fn entity_drape_source(entity: &acadrust::EntityType) -> Option<DrapeSourcePath> {
+pub(super) fn entity_drape_source(entity: &acadrust::EntityType) -> Option<DrapeSourcePath> {
     use acadrust::EntityType;
 
     let (mut points, closed) = match entity {
@@ -4845,8 +4908,19 @@ impl OpenCADStudio {
             return;
         }
         if self.tabs[tab_index].point_cloud.is_empty() {
+            // No cloud attached: drape onto the fetched global terrain
+            // model when one is resident (TERRAIN AREA), so the same
+            // command keeps working in site drawings without LiDAR.
+            if self.tabs[tab_index].terrain.is_some() {
+                return self.drape_selected_to_terrain(
+                    tab_index,
+                    spacing,
+                    vertical_offset,
+                    outside_policy,
+                );
+            }
             self.command_line
-                .push_error("POINTCLOUDDRAPE: attach a LAS/LAZ cloud first.");
+                .push_error("POINTCLOUDDRAPE: attach a LAS/LAZ cloud first (or fetch global terrain with TERRAIN AREA).");
             return;
         }
 

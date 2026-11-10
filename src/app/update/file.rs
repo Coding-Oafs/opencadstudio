@@ -576,6 +576,7 @@ impl OpenCADStudio {
                 section: self.start_section,
             },
             statusbar: self.statusbar_config.clone(),
+            workspace: crate::app::config::WorkspaceConfig { explorer: self.show_project_explorer, jobs: self.show_jobs },
             dock: {
                 let mut dock = self.dock.clone();
                 dock.ensure_settings();
@@ -626,6 +627,8 @@ impl OpenCADStudio {
         // (`refresh_recent_thumbs`) — never here on the boot path.
         self.start_section = cfg.start.section;
         self.statusbar_config = cfg.statusbar;
+        self.show_project_explorer = cfg.workspace.explorer;
+        self.show_jobs = cfg.workspace.jobs;
         let mut dock = cfg.dock;
         dock.ensure_settings();
         self.dock = dock;
@@ -1383,11 +1386,16 @@ impl OpenCADStudio {
         } else {
             Task::none()
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        let terrain_task = self.restore_saved_terrain(i);
+        #[cfg(target_arch = "wasm32")]
+        let terrain_task = Task::none();
         Task::batch([
             thumbs_task,
             pending_open_task,
             layout_task,
             interaction_task,
+            terrain_task,
         ])
     }
 

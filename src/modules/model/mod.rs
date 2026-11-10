@@ -53,6 +53,14 @@ impl CadModule for ModelModule {
         GROUPS.get_or_init(|| {
             vec![
                 RibbonGroup {
+                    title: "Modeling tools",
+                    tools: vec![RibbonItem::LargeTool(ToolDef {
+                        id: "MODEL_TOOL_CENTER", label: "All modeling\ntools",
+                        icon: IconKind::Svg(EXTRUDE_ICON),
+                        event: ModuleEvent::Command("TOOLCENTER MODEL".into()),
+                    })],
+                },
+                RibbonGroup {
                     title: "Model",
                     tools: vec![
                         RibbonItem::LargeTool(tool("BOX", "Box", BOX_ICON)),
@@ -65,6 +73,8 @@ impl CadModule for ModelModule {
                             items: vec![
                                 ("WEDGE", "Wedge", IconKind::Svg(WEDGE_ICON)),
                                 ("TORUS", "Torus", IconKind::Svg(TORUS_ICON)),
+                                ("PYRAMID", "Pyramid", IconKind::Svg(CONE_ICON)),
+                                ("POLYSOLID", "Wall / polysolid", IconKind::Svg(BOX_ICON)),
                             ],
                             default: "WEDGE",
                         },
@@ -85,6 +95,31 @@ impl CadModule for ModelModule {
                         RibbonItem::LargeTool(tool("UNION", "Union", UNION_ICON)),
                         RibbonItem::LargeTool(tool("SUBTRACT", "Subtract", SUBTRACT_ICON)),
                         RibbonItem::LargeTool(tool("INTERSECT", "Intersect", INTERSECT_ICON)),
+                    ],
+                },
+                RibbonGroup {
+                    title: "3D editing",
+                    tools: vec![
+                        tool("3DMOVE", "Move in 3D", EXTRUDE_ICON).into(),
+                        tool("3DROTATE", "Rotate in 3D", REVOLVE_ICON).into(),
+                        tool("3DMIRROR", "Mirror in 3D", LOFT_ICON).into(),
+                        tool("3DALIGN", "Align in 3D", LOFT_ICON).into(),
+                        tool("SLICE", "Slice", SUBTRACT_ICON).into(),
+                        tool("SECTION", "Cross-section", LOFT_ICON).into(),
+                        tool("PRESSPULL", "Press / pull", EXTRUDE_ICON).into(),
+                        tool("THICKEN", "Thicken", EXTRUDE_ICON).into(),
+                        tool("INTERFERE", "Interference", INTERSECT_ICON).into(),
+                    ],
+                },
+                RibbonGroup {
+                    title: "Mesh repair",
+                    tools: vec![
+                        tool("MESHDIAGNOSE", "Diagnose mesh", LOFT_ICON).into(),
+                        tool("MESHORIENT", "Orient faces", LOFT_ICON).into(),
+                        tool("MESHFLIP", "Flip normals", LOFT_ICON).into(),
+                        tool("TOOLCENTER MESHWELD", "Weld vertices…", LOFT_ICON).into(),
+                        tool("TOOLCENTER MESHFILL", "Fill holes…", LOFT_ICON).into(),
+                        tool("TOOLCENTER MESHDELETEFACE", "Delete faces…", LOFT_ICON).into(),
                     ],
                 },
             ]

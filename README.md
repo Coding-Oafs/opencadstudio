@@ -32,18 +32,18 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio"></a>
-  <a href="https://github.com/HakanSeven12/OpenCADStudio/releases"><img alt="Release downloads" src="https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total"></a>
-  <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio"></a>
-  <a href="LICENSE"><img alt="GPL-3.0 license" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
+  <a href="https://github.com/Coding-Oafs/opencadstudio/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Coding-Oafs/opencadstudio"></a>
+  <a href="https://github.com/Coding-Oafs/opencadstudio/releases"><img alt="Release downloads" src="https://img.shields.io/github/downloads/Coding-Oafs/opencadstudio/total"></a>
+  <a href="https://github.com/Coding-Oafs/opencadstudio/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/Coding-Oafs/opencadstudio"></a>
+  <a href="LICENSE"><img alt="GPL-3.0 license" src="https://img.shields.io/github/license/Coding-Oafs/opencadstudio"></a>
 </p>
 
 <p align="center">
   <a href="https://www.opencadstudio.com"><strong>Launch the web app</strong></a>
   ·
-  <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><strong>Download the desktop app</strong></a>
+  <a href="https://github.com/Coding-Oafs/opencadstudio/releases/latest"><strong>Download the desktop app</strong></a>
   ·
-  <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Join the discussion</strong></a>
+  <a href="https://github.com/Coding-Oafs/opencadstudio/discussions"><strong>Join the discussion</strong></a>
 </p>
 
 <p align="center">
@@ -54,9 +54,9 @@
 
 Open CAD Studio is a cross-platform geospatial engineering workstation. It moves from surveyed reality and native feature data into precise CAD drawings, surfaces, models, and auditable deliverables while keeping source data local and external. It reads and writes DWG and DXF natively, imports 3MF surface models on desktop, and shares selected editing and viewing cores with the browser build.
 
-The current release line is **v2.1.1**. See the [v2.1.1 maintenance release notes](docs/v2.1.1-release-notes.md) for the latest reliability fixes. See the [v1.1→v2 development audit](docs/development-audit-v2.md), the [v2.0.0 release notes](docs/v2.0.0-release-notes.md), and the [v2.1.0 release notes](docs/v2.1.0-release-notes.md) for the implemented stage gates and verification record.
+The current release line is **v2.2.0**. See the [v2.2.0 release notes](docs/v2.2.0-release-notes.md) for persistent terrain and the dockable project and jobs panels. See the [v2.1.3 release notes and interface guide](docs/v2.1.3-release-notes.md) for the new terrain workspace, LiDAR surface controls, modeling tools and searchable tool center. See the [v1.1→v2 development audit](docs/development-audit-v2.md), the [v2.0.0 release notes](docs/v2.0.0-release-notes.md), and the [v2.1.0 release notes](docs/v2.1.0-release-notes.md) for earlier stage gates and verification records.
 
-The project is under active development. Keep backups of important production drawings and report reproducible problems through [GitHub Issues](https://github.com/HakanSeven12/OpenCADStudio/issues).
+The project is under active development. Keep backups of important production drawings and report reproducible problems through [GitHub Issues](https://github.com/Coding-Oafs/opencadstudio/issues).
 
 ## Highlights
 
@@ -100,7 +100,7 @@ Use the desktop application for native file associations, file-manager thumbnail
 
 ## Install
 
-Download all current packages from the [latest release](https://github.com/HakanSeven12/OpenCADStudio/releases/latest).
+Download all current packages from the [latest release](https://github.com/Coding-Oafs/opencadstudio/releases/latest).
 
 ### Windows
 
@@ -162,7 +162,7 @@ Windows 11 SDK.
 Then build and run:
 
 ```bash
-git clone https://github.com/HakanSeven12/OpenCADStudio.git
+git clone https://github.com/Coding-Oafs/opencadstudio.git
 cd OpenCADStudio
 cargo build --release --bin OpenCADStudio
 ```
@@ -219,13 +219,13 @@ Desktop plugins run in separate processes and communicate with the host through 
 
 Bug reports, focused pull requests, translations, documentation improvements, and plugin contributions are welcome.
 
-- Search existing [issues](https://github.com/HakanSeven12/OpenCADStudio/issues) before opening a new report.
-- Use [Discussions](https://github.com/HakanSeven12/OpenCADStudio/discussions) for questions and ideas.
+- Search existing [issues](https://github.com/Coding-Oafs/opencadstudio/issues) before opening a new report.
+- Use [Discussions](https://github.com/Coding-Oafs/opencadstudio/discussions) for questions and ideas.
 - Report vulnerabilities privately by following the [security policy](SECURITY.md).
 
 ## Project growth
 
-<a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers">
+<a href="https://github.com/Coding-Oafs/opencadstudio/stargazers">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://www.opencadstudio.com/star-history-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="https://www.opencadstudio.com/star-history-light.svg">
