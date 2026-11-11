@@ -1,4 +1,8 @@
 pub mod about;
+pub mod workspace;
+pub mod tool_center;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod terrain_panel;
 pub mod block_palette;
 pub mod sheetset;
 pub mod tool_palettes;

@@ -338,6 +338,22 @@ impl OpenCADStudio {
             "BASEMAP" => return Some(self.basemap_toggle()),
             cmd if cmd.starts_with("BASEMAP ") => return Some(self.basemap_command(cmd)),
 
+            // ── TERRAIN — global elevation from AWS Terrain Tiles ──────────
+            // TERRAIN                        — report fetch/status summary
+            // TERRAIN AREA <lon lat [km]>    — site area from longitude/latitude
+            // TERRAIN BOUNDS [x0 y0 x1 y1]   — drawing-coordinate area (pick or typed)
+            // TERRAIN ZOOM <0-15>            — source tile zoom
+            // TERRAIN RES <zoom|cell>        — zoom or target cell size in drawing units
+            // TERRAIN FETCH / CANCEL         — start or stop the download
+            // TERRAIN MESH [max-vertices]    — rebuild the 3-D terrain mesh
+            // TERRAIN INFO [x y z]           — elevation query at a point
+            // TERRAIN DRAPE [args]           — drape selection onto the terrain
+            // TERRAIN REMOVE                 — clear the resident elevation model
+            #[cfg(not(target_arch = "wasm32"))]
+            "TERRAIN" => return Some(self.terrain_command(cmd)),
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("TERRAIN ") => return Some(self.terrain_command(cmd)),
+
             // Drawing-owned spatial reference. Bare commands use the generic
             // text prompt; inline forms are automation-friendly.
             "CRS" => {

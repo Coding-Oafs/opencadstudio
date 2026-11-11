@@ -463,7 +463,10 @@ pub(super) fn muted_text_style(theme: &Theme) -> iced::widget::text::Style {
 // ── Tooltip helpers ────────────────────────────────────────────────────────
 
 pub(super) fn make_tip(tip: String) -> Element<'static, Message> {
-    text(tip).size(11).into()
+    let help = tip.lines().last().and_then(|line| line.strip_prefix("Command: "))
+        .and_then(crate::ui::window::tool_center::help_for);
+    let tip = help.map(|help| format!("{tip}\n\n{help}")).unwrap_or(tip);
+    text(tip).size(11).width(300).into()
 }
 
 /// The command a tool button runs, for the "Command:" line of its tooltip.

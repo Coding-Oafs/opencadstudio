@@ -1192,7 +1192,7 @@ impl OpenCADStudio {
                 let total_meshes = selected_meshes.len();
                 if selected_meshes.is_empty() {
                     self.command_line.push_error(
-                        crate::t!(
+                        crate::tf!(
                             "{name}: select one or more MESH entities first (3MF imports are MESH entities)."
                         )
                         .as_ref(),

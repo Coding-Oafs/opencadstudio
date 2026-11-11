@@ -58,6 +58,13 @@ impl OpenCADStudio {
     }
 
     fn dispatch_command_inner(&mut self, cmd: &str, allow_suggest: bool) -> Task<Message> {
+        // Application panels must also open from the welcome tab and must not
+        // discard a drawing selection or an in-progress interactive command.
+        if cmd == "TOOLCENTER" || cmd.starts_with("TOOLCENTER ") {
+            return self.open_tool_center(cmd.strip_prefix("TOOLCENTER").unwrap_or("").trim());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if cmd == "TERRAINPANEL" { return self.open_terrain_panel(); }
         let i = self.active_tab;
         // Expand a command alias ("L" → "LINE") on the leading token before any
         // routing, so every path below (Start-tab gate, plugins, all dispatch
@@ -306,6 +313,10 @@ pub fn start_allowed(cmd: &str) -> bool {
 // excluded.
 inventory::submit!(crate::command::CommandRegistration {
     names: &[
+        "TOOLCENTER",
+        "TERRAINPANEL",
+        "PROJECTEXPLORER",
+        "JOBSPANEL",
         // Drafting-aid / display toggles + customization entry points wired in the
         // dispatch families (no interactive command module of their own).
         "ALIASEDIT",
@@ -375,6 +386,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "BASEMAP",
         "CRS",
         "SPATIALINFO",
+        // Global elevation (AWS Terrain Tiles) fetch, mesh and draping.
+        "TERRAIN",
         "WORKINGUNITS",
         "WUNITS",
         "NAVIGATOR",

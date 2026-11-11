@@ -29,6 +29,8 @@ pub mod draw;
 pub mod insert;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lidar;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod terrain;
 pub mod model;
 pub mod layout;
 pub mod manage;

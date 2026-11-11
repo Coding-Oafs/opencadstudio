@@ -3,6 +3,8 @@ use super::*;
 impl OpenCADStudio {
     pub(super) fn dispatch_display(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
+            "PROJECTEXPLORER" => { self.open_workspace_panel(crate::ui::dock::PanelId::ProjectExplorer); }
+            "JOBSPANEL" => { self.open_workspace_panel(crate::ui::dock::PanelId::Jobs); }
             // Interactive pan: left-drag pans the view until Esc. The only pan
             // path when there is no middle mouse button (trackpad / web).
             "PAN" => {
@@ -1716,6 +1718,13 @@ impl OpenCADStudio {
                 let path = std::path::PathBuf::from(cmd.trim_start_matches("GISIMPORT").trim());
                 self.import_gis_source(i, path);
             }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "GISIMPORT" => return Some(Task::perform(async {
+                rfd::AsyncFileDialog::new().set_title("Import GIS layers")
+                    .add_filter("GIS layers", &["gpkg", "geojson"])
+                    .pick_file().await.map(|file| file.path().to_path_buf())
+            }, Message::GisImportPicked)),
 
             #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd == "GISTOPOLOGY" || cmd.starts_with("GISTOPOLOGY ") => {

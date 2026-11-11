@@ -311,6 +311,30 @@ impl OpenCADStudio {
 
     fn update_inner(&mut self, msg: Message) -> Task<Message> {
         match msg {
+            Message::ToolCenterOpen(category) => self.open_tool_center(&category),
+            Message::ToolCenterSearch(value) => { self.tool_center.search = value; Task::none() }
+            Message::ToolCenterCategory(value) => { self.tool_center.category = value; self.tool_center.selected = None; Task::none() }
+            Message::ToolCenterSelect(index) => { self.tool_center.select(index); Task::none() }
+            Message::ToolCenterValue(index, value) => { if let Some(field) = self.tool_center.values.get_mut(index) { *field = value; } Task::none() }
+            Message::ToolCenterRun(command) => {
+                self.active_modal = None;
+                self.command_line.history_open = true;
+                self.dispatch_command(&command)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::TerrainPanelOpen => self.open_terrain_panel(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::TerrainPanelValue(index, value) => { if let Some(field) = self.terrain_panel.values.get_mut(index) { *field = value; } self.terrain_panel.error.clear(); Task::none() }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::TerrainPanelZoom(value) => { self.terrain_panel.zoom = value.min(15); Task::none() }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::TerrainPanelOutside(value) => { self.terrain_panel.outside = value; Task::none() }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::TerrainPanelAction(action) => self.terrain_panel_action(action),
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::TerrainPanelCommand(command) => { self.terrain_panel.error.clear(); self.dispatch_command(&command) }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::GisImportPicked(path) => { if let Some(path) = path { self.import_gis_source(self.active_tab, path); } Task::none() }
             // Drain plugin-to-host requests that arrived outside of a host call.
             // This runs on a periodic timer so long-lived plugin sessions such
             // as the Python REPL can mutate the document without requiring a
@@ -1503,7 +1527,23 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::TerrainLoaded(loaded) => {
+                self.install_terrain(loaded);
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::TerrainRestored(id, key, result) => {
+                self.install_restored_terrain(id, key, result);
+                Task::none()
+            }
+
             Message::BasemapProgressTick => Task::none(),
+            Message::WorkspaceSearch(value) => { self.workspace_search = value; Task::none() }
+            Message::WorkspaceFocus(target) => self.focus_workspace_item(target),
+            Message::WorkspaceCancel(key) => { self.cancel_workspace_job(key); Task::none() }
+            Message::WorkspaceLog => { self.command_line.history_open = true; Task::none() }
 
             #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudExport => {

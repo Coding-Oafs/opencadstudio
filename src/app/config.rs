@@ -30,6 +30,7 @@ pub struct AppConfig {
     /// General edge-stack dock layout (which panels are docked, side, order,
     /// width and auto-collapse) for the Properties panel and block palette.
     pub dock: crate::ui::dock::DockState,
+    pub workspace: WorkspaceConfig,
     /// Add a newly selected annotation scale to existing annotative objects.
     pub annotation_auto_scale: i8,
     /// Ribbon collapse density.
@@ -56,6 +57,7 @@ impl Default for AppConfig {
             start: StartConfig::default(),
             statusbar: StatusBarConfig::default(),
             dock: crate::ui::dock::DockState::default(),
+            workspace: WorkspaceConfig::default(),
             annotation_auto_scale: -4,
             ribbon: RibbonConfig::default(),
             plot: PlotDialogState::default(),
@@ -68,6 +70,13 @@ impl Default for AppConfig {
             basemap: crate::scene::basemap::BasemapSettings::default(),
         }
     }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkspaceConfig { pub explorer: bool, pub jobs: bool }
+impl Default for WorkspaceConfig {
+    fn default() -> Self { Self { explorer: true, jobs: false } }
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

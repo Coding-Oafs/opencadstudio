@@ -41,6 +41,8 @@ pub enum DockMsg {
 pub enum PanelId {
     Properties,
     BlockPalette,
+    ProjectExplorer,
+    Jobs,
 }
 
 impl PanelId {
@@ -49,6 +51,8 @@ impl PanelId {
         match self {
             PanelId::Properties => "Properties",
             PanelId::BlockPalette => "Block Palette",
+            PanelId::ProjectExplorer => "Project Explorer",
+            PanelId::Jobs => "Background Jobs",
         }
     }
 
@@ -57,6 +61,7 @@ impl PanelId {
         match self {
             PanelId::Properties => 250.0,
             PanelId::BlockPalette => 260.0,
+            PanelId::ProjectExplorer | PanelId::Jobs => 300.0,
         }
     }
 }
@@ -105,7 +110,7 @@ impl Default for DockState {
     fn default() -> Self {
         Self {
             left: vec![PanelId::Properties],
-            right: vec![PanelId::BlockPalette],
+            right: vec![PanelId::BlockPalette, PanelId::ProjectExplorer, PanelId::Jobs],
             panels: BTreeMap::new(),
         }
     }
@@ -131,8 +136,9 @@ impl DockState {
     /// resize never hit a missing configuration. Also a cheap heal for configs
     /// written by an older version.
     pub fn ensure_settings(&mut self) {
-        for id in [PanelId::Properties, PanelId::BlockPalette] {
+        for id in [PanelId::Properties, PanelId::BlockPalette, PanelId::ProjectExplorer, PanelId::Jobs] {
             self.panels.entry(id).or_insert_with(|| DockPanel::for_id(id));
+            if self.location(id).is_none() { self.right.push(id); }
         }
     }
 
@@ -245,6 +251,7 @@ mod tests {
     #[test]
     fn dock_moves_between_sides() {
         let mut state = DockState::default();
+        let previous_right = state.right.len();
         assert!(state.dock(PanelId::Properties, DockSide::Right, 0));
         assert_eq!(
             state.location(PanelId::Properties),
@@ -252,16 +259,17 @@ mod tests {
         );
         // It no longer occupies the left edge.
         assert!(state.left.is_empty());
-        assert_eq!(state.right.len(), 2);
+        assert_eq!(state.right.len(), previous_right + 1);
     }
 
     #[test]
     fn dock_clamps_index() {
         let mut state = DockState::default();
+        let last_index = state.right.len();
         assert!(state.dock(PanelId::Properties, DockSide::Right, 99));
         assert_eq!(
             state.location(PanelId::Properties),
-            Some((DockSide::Right, 1))
+            Some((DockSide::Right, last_index))
         );
     }
 

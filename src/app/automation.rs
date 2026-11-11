@@ -262,6 +262,12 @@ impl OpenCADStudio {
                         );
                         self.tabs[i].adopt_active_ucs_from_header();
                         self.tabs[i].current_path = Some(PathBuf::from(path));
+                        self.load_spatial_settings(i);
+                        if let Some(saved) = self.tabs[i].spatial.terrain.clone() {
+                            self.tabs[i].terrain_request = saved.request;
+                            let result = super::terrain_store::load(&saved.key).map_err(|e| e.to_string());
+                            self.install_restored_terrain(self.tabs[i].id, saved.key, result);
+                        }
                         self.tabs[i].is_start = false;
                         #[cfg(not(target_arch = "wasm32"))]
                         self.install_native_edit_guard(

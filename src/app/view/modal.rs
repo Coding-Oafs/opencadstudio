@@ -10,6 +10,9 @@ impl OpenCADStudio {
     pub(super) fn modal_title(&self) -> String {
         use super::super::ModalKind as K;
         match self.active_modal {
+            Some(K::ToolCenter) => "Tool center".into(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(K::TerrainPanel) => "Terrain & elevation".into(),
             Some(K::About) => crate::tr!("modal", "about"),
             Some(K::Shortcuts) => crate::tr!("modal", "keyboard-shortcuts"),
             Some(K::Aliases) => crate::tr!("modal", "command-aliases"),
@@ -65,6 +68,9 @@ impl OpenCADStudio {
     pub(super) fn modal_content<'s>(&'s self) -> Option<Element<'s, Message>> {
         let ex = self.modal_resize;
         Some(match self.active_modal? {
+            super::super::ModalKind::ToolCenter => sized_flow(ex, 940, 650, |flow| crate::ui::window::tool_center::view(&self.tool_center, flow)),
+            #[cfg(not(target_arch = "wasm32"))]
+            super::super::ModalKind::TerrainPanel => sized_flow(ex, 860, 730, |flow| crate::ui::window::terrain_panel::view(&self.terrain_panel, self.terrain_panel_data(), flow)),
             super::super::ModalKind::About => {
                 automatic_flow(ex, crate::ui::window::about::view_window)
             }

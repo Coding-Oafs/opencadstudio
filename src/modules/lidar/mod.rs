@@ -41,6 +41,24 @@ impl CadModule for LidarModule {
         GROUPS.get_or_init(|| {
             vec![
                 RibbonGroup {
+                    title: "Surface & processing",
+                    tools: vec![
+                        RibbonItem::LargeTool(tool("LIDAR_TOOL_CENTER", "All LiDAR\ntools", "TOOLCENTER LIDAR", CLOUD)),
+                        RibbonItem::LargeDropdown {
+                            id: "LIDAR_SURFACE_PRODUCTS", label: "Surface\nproducts", icon: IconKind::Svg(CLOUD),
+                            items: vec![
+                                ("TOOLCENTER POINTCLOUDDTM", "Bare-earth elevation (DTM)…", IconKind::Svg(CLOUD)),
+                                ("TOOLCENTER POINTCLOUDDSM", "Top-surface elevation (DSM)…", IconKind::Svg(CLOUD)),
+                                ("TOOLCENTER POINTCLOUDHILLSHADE", "Hillshade…", IconKind::Svg(CLOUD)),
+                                ("TOOLCENTER POINTCLOUDCONTOUR", "Contours…", IconKind::Svg(CLOUD)),
+                                ("TOOLCENTER POINTCLOUDSURFACEAT", "Query elevation…", IconKind::Svg(POINT)),
+                            ], default: "TOOLCENTER POINTCLOUDDTM",
+                        },
+                        RibbonItem::LargeTool(tool("LIDAR_DRAPE_SETTINGS", "Drape\nobjects", "TOOLCENTER POINTCLOUDDRAPE", CLOUD)),
+                        tool("LIDAR_BREAKLINES", "Validate breaklines", "POINTCLOUDBREAKLINECHECK", AUDIT).into(),
+                    ],
+                },
+                RibbonGroup {
                     title: "Cloud",
                     tools: vec![
                         RibbonItem::LargeTool(tool(
@@ -205,11 +223,11 @@ impl CadModule for LidarModule {
                         tool(
                             "LIDAR_AUTO_NOISE",
                             "Auto Noise",
-                            "POINTCLOUDNOISE 2.0 4 7",
+                            "TOOLCENTER POINTCLOUDNOISE",
                             UNDO,
                         )
                         .into(),
-                        tool("LIDAR_CONTOURS", "Contours", "POINTCLOUDCONTOUR 1", CLOUD).into(),
+                        tool("LIDAR_CONTOURS", "Contours", "TOOLCENTER POINTCLOUDCONTOUR", CLOUD).into(),
                         RibbonItem::Dropdown {
                             id: "LIDAR_FLAGS",
                             icon: IconKind::Svg(AUDIT),

@@ -202,6 +202,8 @@ pub struct DrawingSpatialSettings {
     /// Optional drawing-coordinate envelope supplied before geometry or LiDAR
     /// exists: `[min_x, min_y, max_x, max_y]`.
     pub basemap_bounds: Option<[f64; 4]>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) terrain: Option<super::terrain_store::SavedTerrain>,
 }
 
 impl Default for DrawingSpatialSettings {
@@ -210,6 +212,8 @@ impl Default for DrawingSpatialSettings {
             drawing_crs: None,
             working_unit: WorkingUnit::Meters,
             basemap_bounds: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            terrain: None,
         }
     }
 }
@@ -264,6 +268,8 @@ impl OpenCADStudio {
                 );
                 return Task::none();
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            self.invalidate_terrain_coordinates(i);
             self.tabs[i].spatial.drawing_crs = None;
             self.tabs[i].spatial.normalize();
             self.persist_spatial_settings(i);
@@ -326,6 +332,8 @@ impl OpenCADStudio {
         }
         let cleared_stale_bounds =
             changed && previous.is_some() && self.tabs[i].spatial.basemap_bounds.take().is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        if changed { self.invalidate_terrain_coordinates(i); }
         self.tabs[i].spatial.drawing_crs = Some(crs);
         self.tabs[i].spatial.working_unit = unit;
         self.basemap.projection = crate::scene::basemap::BasemapProjection::FromDrawing;
@@ -389,6 +397,8 @@ impl OpenCADStudio {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn persist_spatial_settings(&mut self, tab_index: usize) {
+        let request = self.tabs[tab_index].terrain_request;
+        if let Some(saved) = self.tabs[tab_index].spatial.terrain.as_mut() { saved.request = request; }
         let Some(path) = self.tabs[tab_index].current_path.clone() else {
             return;
         };

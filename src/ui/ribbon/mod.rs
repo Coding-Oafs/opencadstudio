@@ -525,7 +525,7 @@ impl Ribbon {
             .padding([2, 8]);
         let mode_dd = PosReport::new(COLLAPSE_MODE_ID, mode_btn);
 
-        let mut tab_row = row![container(
+        let mut tab_row = row![button(text("Find tools").size(12)).on_press(Message::ToolCenterOpen("All tools".into())).padding([4, 10]), container(
             WrapBar::new(lead.into(), tabs.into())
                 .spacing(6.0)
                 .report_height(self.tab_bar_h.clone()),
